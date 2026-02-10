@@ -1,0 +1,949 @@
+(function () {
+  'use strict';
+
+  const DB_NAME = 'VoiceButtonDB';
+  const STORE_NAME = 'buttons';
+  const MAX_BUTTONS = 9;
+  const MIN_RECORDING_MS = 200;
+
+  // ── SVG Icons ──
+
+  const Icons = {
+    mic: `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+      <line x1="12" y1="19" x2="12" y2="23"/>
+      <line x1="8" y1="23" x2="16" y2="23"/>
+    </svg>`,
+    micCheck: `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+      <line x1="12" y1="19" x2="12" y2="23"/>
+      <line x1="8" y1="23" x2="16" y2="23"/>
+      <circle cx="19" cy="5" r="4" fill="#2563eb" stroke="#2563eb"/>
+      <path d="M17.5 5l1 1 2-2" stroke="#fff" stroke-width="1.5"/>
+    </svg>`,
+    recordDot: `<svg width="32" height="32" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="8" fill="#dc2626"/>
+    </svg>`,
+    speaker: `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+      <path class="speaker-wave" d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+      <path class="speaker-wave" d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+    </svg>`,
+    warning: `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+      <line x1="12" y1="9" x2="12" y2="13"/>
+      <line x1="12" y1="17" x2="12.01" y2="17"/>
+    </svg>`,
+    x: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+    </svg>`,
+    play: `<svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor">
+      <polygon points="6 3 20 12 6 21 6 3"/>
+    </svg>`,
+  };
+
+  // ── IndexedDB Module ──
+
+  const DB = {
+    _db: null,
+
+    open() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains(STORE_NAME)) {
+            db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+          }
+        };
+        req.onsuccess = (e) => {
+          DB._db = e.target.result;
+          resolve(DB._db);
+        };
+        req.onerror = (e) => reject(e.target.error);
+      });
+    },
+
+    _tx(mode) {
+      const tx = DB._db.transaction(STORE_NAME, mode);
+      return tx.objectStore(STORE_NAME);
+    },
+
+    getAll() {
+      return new Promise((resolve, reject) => {
+        const req = DB._tx('readonly').getAll();
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = (e) => reject(e.target.error);
+      });
+    },
+
+    get(id) {
+      return new Promise((resolve, reject) => {
+        const req = DB._tx('readonly').get(id);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = (e) => reject(e.target.error);
+      });
+    },
+
+    put(data) {
+      return new Promise((resolve, reject) => {
+        const req = DB._tx('readwrite').put(data);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = (e) => reject(e.target.error);
+      });
+    },
+
+    delete(id) {
+      return new Promise((resolve, reject) => {
+        const req = DB._tx('readwrite').delete(id);
+        req.onsuccess = () => resolve();
+        req.onerror = (e) => reject(e.target.error);
+      });
+    },
+  };
+
+  // ── Audio Manager ──
+
+  const AudioManager = {
+    _recorder: null,
+    _stream: null,
+    _chunks: [],
+    _audio: null,
+    _objectUrl: null,
+    _recordingButtonId: null,
+    _playingButtonId: null,
+    _recordStartTime: null,
+    _timerInterval: null,
+
+    isRecording() { return this._recorder && this._recorder.state === 'recording'; },
+    isPlaying() { return this._audio && !this._audio.paused; },
+    getRecordingButtonId() { return this._recordingButtonId; },
+    getPlayingButtonId() { return this._playingButtonId; },
+
+    _getSupportedMimeType() {
+      const types = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/ogg;codecs=opus',
+        'audio/mp4',
+      ];
+      for (const type of types) {
+        if (MediaRecorder.isTypeSupported(type)) return type;
+      }
+      return '';
+    },
+
+    async startRecording(buttonId) {
+      if (this.isRecording()) await this.stopRecording();
+      if (this.isPlaying()) this.stopPlayback();
+
+      this._recordingButtonId = buttonId;
+      this._chunks = [];
+
+      try {
+        this._stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (err) {
+        this._recordingButtonId = null;
+        throw err;
+      }
+
+      const mimeType = this._getSupportedMimeType();
+      const options = mimeType ? { mimeType } : {};
+      this._recorder = new MediaRecorder(this._stream, options);
+
+      this._recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) this._chunks.push(e.data);
+      };
+
+      this._recordStartTime = Date.now();
+      this._recorder.start();
+
+      this._timerInterval = setInterval(() => {
+        const elapsed = Date.now() - this._recordStartTime;
+        UI.updateRecordingTimer(buttonId, elapsed);
+      }, 100);
+    },
+
+    stopRecording() {
+      return new Promise((resolve) => {
+        if (!this._recorder || this._recorder.state === 'inactive') {
+          this._cleanupRecording();
+          resolve(null);
+          return;
+        }
+
+        const buttonId = this._recordingButtonId;
+        const startTime = this._recordStartTime;
+        const recorder = this._recorder;
+
+        recorder.onstop = async () => {
+          const elapsed = Date.now() - startTime;
+
+          clearInterval(this._timerInterval);
+          this._timerInterval = null;
+
+          if (this._stream) {
+            this._stream.getTracks().forEach((t) => t.stop());
+            this._stream = null;
+          }
+
+          if (elapsed < MIN_RECORDING_MS) {
+            showToast('Recording too short — discarded');
+            this._cleanupRecording();
+            UI.setCardState(buttonId);
+            resolve(null);
+            return;
+          }
+
+          const mimeType = recorder.mimeType || 'audio/webm';
+          const audioBlob = new Blob(this._chunks, { type: mimeType });
+          const audioDuration = elapsed;
+
+          try {
+            const record = await DB.get(buttonId);
+            if (record) {
+              record.hasAudio = true;
+              record.audioBlob = audioBlob;
+              record.audioDuration = audioDuration;
+              record.mimeType = mimeType;
+              await DB.put(record);
+              updateStorageInfo();
+            }
+          } catch (err) {
+            console.error('Failed to save recording:', err);
+            showToast('Failed to save recording');
+          }
+
+          this._cleanupRecording();
+          UI.setCardState(buttonId);
+          resolve(buttonId);
+        };
+
+        recorder.stop();
+      });
+    },
+
+    _cleanupRecording() {
+      if (this._stream) {
+        this._stream.getTracks().forEach((t) => t.stop());
+        this._stream = null;
+      }
+      clearInterval(this._timerInterval);
+      this._timerInterval = null;
+      this._recorder = null;
+      this._chunks = [];
+      this._recordingButtonId = null;
+      this._recordStartTime = null;
+    },
+
+    startPlayback(buttonId, blob) {
+      if (this.isRecording()) return;
+      if (this.isPlaying()) this.stopPlayback();
+
+      this._objectUrl = URL.createObjectURL(blob);
+      this._audio = new Audio(this._objectUrl);
+      this._playingButtonId = buttonId;
+
+      this._audio.onended = () => {
+        this.stopPlayback();
+      };
+
+      this._audio.onerror = () => {
+        showToast('Playback error');
+        this.stopPlayback();
+      };
+
+      this._audio.play().catch(() => {
+        showToast('Playback failed');
+        this.stopPlayback();
+      });
+
+      UI.setCardState(buttonId);
+    },
+
+    stopPlayback() {
+      const buttonId = this._playingButtonId;
+      if (this._audio) {
+        this._audio.pause();
+        this._audio.onended = null;
+        this._audio.onerror = null;
+        this._audio = null;
+      }
+      if (this._objectUrl) {
+        URL.revokeObjectURL(this._objectUrl);
+        this._objectUrl = null;
+      }
+      this._playingButtonId = null;
+      if (buttonId) UI.setCardState(buttonId);
+    },
+  };
+
+  // ── UI Module ──
+
+  const UI = {
+    _grid: null,
+    _countEl: null,
+    _addBtn: null,
+    _buttonData: new Map(),
+
+    init() {
+      this._grid = document.getElementById('button-grid');
+      this._countEl = document.getElementById('button-count');
+      this._addBtn = document.getElementById('btn-add');
+    },
+
+    updateCount() {
+      const count = this._buttonData.size;
+      this._countEl.textContent = `${count} / ${MAX_BUTTONS}`;
+      this._addBtn.disabled = count >= MAX_BUTTONS;
+    },
+
+    formatDuration(ms) {
+      const secs = Math.floor(ms / 1000);
+      const mins = Math.floor(secs / 60);
+      const remSecs = secs % 60;
+      return `${mins}:${String(remSecs).padStart(2, '0')}`;
+    },
+
+    formatTimer(ms) {
+      const secs = Math.floor(ms / 1000);
+      const tenths = Math.floor((ms % 1000) / 100);
+      return `${secs}.${tenths}s`;
+    },
+
+    updateRecordingTimer(buttonId, elapsed) {
+      const card = document.querySelector(`[data-id="${buttonId}"]`);
+      if (!card) return;
+      const timer = card.querySelector('.recording-timer');
+      if (timer) timer.textContent = this.formatTimer(elapsed);
+    },
+
+    getCardState(buttonId) {
+      if (AudioManager.getRecordingButtonId() === buttonId) return 'recording';
+      if (AudioManager.getPlayingButtonId() === buttonId) return 'playing';
+      const data = this._buttonData.get(buttonId);
+      if (data && data.hasAudio) return 'has-audio';
+      return 'empty';
+    },
+
+    setCardState(buttonId) {
+      const card = document.querySelector(`[data-id="${buttonId}"]`);
+      if (!card) return;
+      const data = this._buttonData.get(buttonId);
+      if (!data) return;
+
+      DB.get(buttonId).then((fresh) => {
+        if (fresh) {
+          this._buttonData.set(buttonId, fresh);
+          this._applyCardState(card, fresh);
+        } else {
+          this._applyCardState(card, data);
+        }
+      }).catch(() => {
+        this._applyCardState(card, data);
+      });
+    },
+
+    _applyCardState(card, data) {
+      const buttonId = data.id;
+      const state = this.getCardState(buttonId);
+
+      card.classList.remove('state-empty', 'state-recording', 'state-has-audio', 'state-playing', 'state-error');
+      card.classList.add(`state-${state}`);
+
+      const iconEl = card.querySelector('.card-icon');
+      const big = isBigMode();
+
+      if (big) {
+        switch (state) {
+          case 'empty':
+            iconEl.innerHTML = Icons.mic;
+            break;
+          case 'recording':
+            iconEl.innerHTML = Icons.recordDot;
+            break;
+          case 'has-audio':
+            iconEl.innerHTML = Icons.play;
+            break;
+          case 'playing':
+            iconEl.innerHTML = Icons.speaker;
+            break;
+        }
+      } else {
+        switch (state) {
+          case 'empty':
+            iconEl.innerHTML = Icons.mic;
+            break;
+          case 'recording':
+            iconEl.innerHTML = Icons.recordDot;
+            break;
+          case 'has-audio':
+            iconEl.innerHTML = Icons.micCheck;
+            break;
+          case 'playing':
+            iconEl.innerHTML = Icons.speaker;
+            break;
+        }
+      }
+
+      const statusEl = card.querySelector('.card-status');
+      if (big) {
+        switch (state) {
+          case 'empty':
+            statusEl.innerHTML = '点击录音';
+            break;
+          case 'recording':
+            statusEl.innerHTML = '<span class="recording-timer">0.0s</span>';
+            break;
+          case 'has-audio':
+            statusEl.textContent = this.formatDuration(data.audioDuration || 0);
+            break;
+          case 'playing':
+            statusEl.textContent = '播放中...';
+            break;
+        }
+      } else {
+        switch (state) {
+          case 'empty':
+            statusEl.innerHTML = 'No recording';
+            break;
+          case 'recording':
+            statusEl.innerHTML = '<span class="recording-timer">0.0s</span>';
+            break;
+          case 'has-audio':
+            statusEl.textContent = this.formatDuration(data.audioDuration || 0);
+            break;
+          case 'playing':
+            statusEl.textContent = 'Playing...';
+            break;
+        }
+      }
+
+      const actionsEl = card.querySelector('.card-actions');
+      actionsEl.innerHTML = '';
+
+      if (big) {
+        // In big mode, no action buttons — the whole card is clickable
+      } else if (state === 'recording') {
+        const stopBtn = document.createElement('button');
+        stopBtn.className = 'card-btn btn-record recording';
+        stopBtn.textContent = 'Stop';
+        stopBtn.addEventListener('click', () => handleStopRecording(buttonId));
+        actionsEl.appendChild(stopBtn);
+      } else {
+        const recBtn = document.createElement('button');
+        recBtn.className = 'card-btn btn-record';
+        recBtn.textContent = data.hasAudio ? 'Re-record' : 'Record';
+        recBtn.addEventListener('click', () => handleStartRecording(buttonId));
+        actionsEl.appendChild(recBtn);
+
+        if (state === 'playing') {
+          const stopBtn = document.createElement('button');
+          stopBtn.className = 'card-btn btn-play playing';
+          stopBtn.textContent = 'Stop';
+          stopBtn.addEventListener('click', () => AudioManager.stopPlayback());
+          actionsEl.appendChild(stopBtn);
+        } else if (data.hasAudio) {
+          const playBtn = document.createElement('button');
+          playBtn.className = 'card-btn btn-play';
+          playBtn.textContent = 'Play';
+          playBtn.addEventListener('click', () => handlePlay(buttonId));
+          actionsEl.appendChild(playBtn);
+        }
+      }
+    },
+
+    renderCard(data) {
+      this._buttonData.set(data.id, data);
+
+      const card = document.createElement('div');
+      card.className = 'voice-card';
+      card.dataset.id = data.id;
+      card.draggable = true;
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'btn-delete';
+      deleteBtn.title = 'Delete';
+      deleteBtn.innerHTML = Icons.x;
+      deleteBtn.addEventListener('click', () => handleDelete(data.id));
+      card.appendChild(deleteBtn);
+
+      const label = document.createElement('div');
+      label.className = 'card-label';
+      label.textContent = data.label;
+      card.appendChild(label);
+
+      // Inline label editing (double-click, edit mode only)
+      label.addEventListener('dblclick', (e) => {
+        if (isBigMode()) return;
+        e.stopPropagation();
+        const oldText = label.textContent;
+        label.contentEditable = 'true';
+        label.classList.add('editing');
+        label.focus();
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(label);
+        sel.removeAllRanges();
+        sel.addRange(range);
+
+        const finishEdit = () => {
+          label.contentEditable = 'false';
+          label.classList.remove('editing');
+          const newText = label.textContent.trim();
+          if (!newText) {
+            label.textContent = oldText;
+            return;
+          }
+          if (newText !== oldText) {
+            const record = UI._buttonData.get(data.id);
+            if (record) {
+              record.label = newText;
+              DB.put(record);
+            }
+          }
+        };
+
+        const onKey = (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            label.blur();
+          } else if (e.key === 'Escape') {
+            label.textContent = oldText;
+            label.blur();
+          }
+        };
+
+        label.addEventListener('keydown', onKey);
+        label.addEventListener('blur', () => {
+          label.removeEventListener('keydown', onKey);
+          finishEdit();
+        }, { once: true });
+      });
+
+      const icon = document.createElement('div');
+      icon.className = 'card-icon';
+      card.appendChild(icon);
+
+      const status = document.createElement('div');
+      status.className = 'card-status';
+      card.appendChild(status);
+
+      const actions = document.createElement('div');
+      actions.className = 'card-actions';
+      card.appendChild(actions);
+
+      this._grid.appendChild(card);
+      this._applyCardState(card, data);
+      this.updateCount();
+    },
+
+    removeCard(id) {
+      this._buttonData.delete(id);
+      const card = document.querySelector(`[data-id="${id}"]`);
+      if (card) card.remove();
+      this.updateCount();
+    },
+
+    async renderAll() {
+      this._grid.innerHTML = '';
+      this._buttonData.clear();
+      const all = await DB.getAll();
+      all.sort((a, b) => a.order - b.order);
+      for (const data of all) {
+        this.renderCard(data);
+      }
+    },
+
+    setCardError(buttonId, message) {
+      const card = document.querySelector(`[data-id="${buttonId}"]`);
+      if (!card) return;
+
+      card.classList.remove('state-empty', 'state-recording', 'state-has-audio', 'state-playing');
+      card.classList.add('state-error');
+
+      card.querySelector('.card-icon').innerHTML = Icons.warning;
+      card.querySelector('.card-status').textContent = message;
+
+      setTimeout(() => this.setCardState(buttonId), 3000);
+    },
+  };
+
+  // ── Big Mode Helper ──
+
+  function isBigMode() {
+    return document.getElementById('button-grid').classList.contains('big-mode');
+  }
+
+  // ── Storage Estimation ──
+
+  async function updateStorageInfo() {
+    const el = document.getElementById('storage-info');
+    if (!el) return;
+    if (!navigator.storage || !navigator.storage.estimate) {
+      el.textContent = '';
+      return;
+    }
+    try {
+      const { quota, usage } = await navigator.storage.estimate();
+      const remainMB = Math.floor((quota - usage) / 1024 / 1024);
+      const approxMinutes = Math.floor(remainMB / 1);
+      if (remainMB > 1024) {
+        el.textContent = `剩余 ${(remainMB / 1024).toFixed(1)} GB (约 ${approxMinutes} 分钟)`;
+      } else {
+        el.textContent = `剩余 ${remainMB} MB (约 ${approxMinutes} 分钟)`;
+      }
+    } catch (err) {
+      el.textContent = '';
+    }
+  }
+
+  // ── Event Handlers ──
+
+  async function handleStartRecording(buttonId) {
+    if (AudioManager.isRecording()) {
+      const prevId = AudioManager.getRecordingButtonId();
+      await AudioManager.stopRecording();
+      if (prevId) UI.setCardState(prevId);
+    }
+
+    if (AudioManager.isPlaying()) {
+      AudioManager.stopPlayback();
+    }
+
+    try {
+      await AudioManager.startRecording(buttonId);
+      UI.setCardState(buttonId);
+    } catch (err) {
+      console.error('Recording failed:', err);
+      if (err.name === 'NotAllowedError') {
+        UI.setCardError(buttonId, 'Mic permission denied');
+      } else {
+        UI.setCardError(buttonId, 'Mic unavailable');
+      }
+    }
+  }
+
+  async function handleStopRecording(buttonId) {
+    await AudioManager.stopRecording();
+    UI.setCardState(buttonId);
+  }
+
+  async function handlePlay(buttonId) {
+    const data = await DB.get(buttonId);
+    if (!data || !data.audioBlob) {
+      showToast('No audio to play');
+      return;
+    }
+    AudioManager.startPlayback(buttonId, data.audioBlob);
+  }
+
+  function handleDelete(id) {
+    const data = UI._buttonData.get(id);
+    const label = data ? data.label : 'this button';
+    const deleteOverlay = document.getElementById('delete-overlay');
+    document.getElementById('delete-message').textContent = `Are you sure you want to delete "${label}"?`;
+    pendingDeleteId = id;
+    deleteOverlay.hidden = false;
+    document.getElementById('delete-confirm').focus();
+  }
+
+  async function confirmDelete() {
+    if (!pendingDeleteId) return;
+    const id = pendingDeleteId;
+    pendingDeleteId = null;
+    document.getElementById('delete-overlay').hidden = true;
+
+    if (AudioManager.getRecordingButtonId() === id) {
+      await AudioManager.stopRecording();
+    }
+    if (AudioManager.getPlayingButtonId() === id) {
+      AudioManager.stopPlayback();
+    }
+
+    try {
+      await DB.delete(id);
+      UI.removeCard(id);
+    } catch (err) {
+      console.error('Failed to delete button:', err);
+      showToast('Failed to delete button');
+    }
+  }
+
+  // ── Toast ──
+
+  let toastTimer = null;
+  let pendingDeleteId = null;
+
+  function showToast(msg) {
+    const toast = document.getElementById('toast');
+    toast.textContent = msg;
+    toast.hidden = false;
+    void toast.offsetHeight;
+    toast.classList.add('show');
+
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toast.classList.remove('show');
+      setTimeout(() => { toast.hidden = true; }, 300);
+    }, 2500);
+  }
+
+  // ── Modal Helpers ──
+
+  function showAddModal() {
+    const count = UI._buttonData.size;
+    const modalInput = document.getElementById('modal-input');
+    modalInput.value = `Button ${count + 1}`;
+    document.getElementById('modal-overlay').hidden = false;
+    modalInput.select();
+    modalInput.focus();
+  }
+
+  function hideAddModal() {
+    document.getElementById('modal-overlay').hidden = true;
+  }
+
+  async function confirmAddButton() {
+    const modalInput = document.getElementById('modal-input');
+    const label = modalInput.value.trim();
+    if (!label) {
+      modalInput.focus();
+      return;
+    }
+
+    if (UI._buttonData.size >= MAX_BUTTONS) {
+      showToast('Maximum 9 buttons reached');
+      hideAddModal();
+      return;
+    }
+
+    const id = 'btn_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+    const data = {
+      id,
+      label,
+      order: Date.now(),
+      createdAt: new Date().toISOString(),
+      hasAudio: false,
+      audioBlob: null,
+      audioDuration: 0,
+      mimeType: null,
+    };
+
+    try {
+      await DB.put(data);
+      UI.renderCard(data);
+    } catch (err) {
+      console.error('Failed to save button:', err);
+      if (err.name === 'QuotaExceededError') {
+        showToast('Storage quota exceeded');
+      } else {
+        showToast('Failed to create button');
+      }
+    }
+
+    hideAddModal();
+  }
+
+  // ── Browser Support Detection ──
+
+  function checkBrowserSupport() {
+    const warnings = [];
+
+    if (!window.indexedDB) {
+      warnings.push('IndexedDB is not supported. This app cannot store data.');
+    }
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      warnings.push('MediaDevices API not available. Recording will not work.');
+    }
+
+    if (typeof MediaRecorder === 'undefined') {
+      warnings.push('MediaRecorder is not supported. Recording will not work.');
+    }
+
+    const loc = window.location;
+    if (loc.protocol !== 'https:' && loc.hostname !== 'localhost' && loc.hostname !== '127.0.0.1' && loc.protocol !== 'file:') {
+      warnings.push('This page is not served over HTTPS. Microphone access may be blocked.');
+    }
+
+    if (warnings.length > 0) {
+      const warningEl = document.getElementById('browser-warning');
+      document.getElementById('warning-text').textContent = warnings.join(' ');
+      warningEl.hidden = false;
+    }
+  }
+
+  // ── beforeunload Cleanup ──
+
+  window.addEventListener('beforeunload', () => {
+    if (AudioManager.isRecording()) {
+      AudioManager.stopRecording();
+    }
+    if (AudioManager.isPlaying()) {
+      AudioManager.stopPlayback();
+    }
+  });
+
+  // ── Init ──
+
+  document.addEventListener('DOMContentLoaded', async () => {
+    checkBrowserSupport();
+    UI.init();
+
+    // Add Button
+    document.getElementById('btn-add').addEventListener('click', showAddModal);
+
+    // Add Modal
+    document.getElementById('modal-cancel').addEventListener('click', hideAddModal);
+    document.getElementById('modal-confirm').addEventListener('click', confirmAddButton);
+
+    document.getElementById('modal-overlay').addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) hideAddModal();
+    });
+
+    document.getElementById('modal-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') confirmAddButton();
+      if (e.key === 'Escape') hideAddModal();
+    });
+
+    // Delete Modal
+    document.getElementById('delete-cancel').addEventListener('click', () => {
+      pendingDeleteId = null;
+      document.getElementById('delete-overlay').hidden = true;
+    });
+
+    document.getElementById('delete-confirm').addEventListener('click', confirmDelete);
+
+    document.getElementById('delete-overlay').addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) {
+        pendingDeleteId = null;
+        e.currentTarget.hidden = true;
+      }
+    });
+
+    // Global keyboard
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        const modalOverlay = document.getElementById('modal-overlay');
+        const deleteOverlay = document.getElementById('delete-overlay');
+        if (!modalOverlay.hidden) hideAddModal();
+        if (!deleteOverlay.hidden) {
+          pendingDeleteId = null;
+          deleteOverlay.hidden = true;
+        }
+      }
+    });
+
+    // Big mode toggle
+    const modeToggle = document.getElementById('mode-toggle');
+    const modeLabel = document.getElementById('mode-label');
+    const grid = document.getElementById('button-grid');
+
+    function updateModeLabel() {
+      modeLabel.textContent = modeToggle.checked ? '按钮模式' : '编辑模式';
+    }
+
+    modeToggle.addEventListener('change', () => {
+      if (modeToggle.checked) {
+        grid.classList.add('big-mode');
+      } else {
+        grid.classList.remove('big-mode');
+      }
+      updateModeLabel();
+      localStorage.setItem('voiceboard-bigmode', modeToggle.checked ? '1' : '0');
+      UI.renderAll();
+    });
+
+    // Restore big mode preference
+    if (localStorage.getItem('voiceboard-bigmode') === '1') {
+      modeToggle.checked = true;
+      grid.classList.add('big-mode');
+    }
+    updateModeLabel();
+
+    // Big mode card click delegation
+    grid.addEventListener('click', (e) => {
+      if (!isBigMode()) return;
+      if (e.target.closest('.btn-delete')) return;
+
+      const card = e.target.closest('.voice-card');
+      if (!card) return;
+
+      const buttonId = card.dataset.id;
+      const state = UI.getCardState(buttonId);
+
+      switch (state) {
+        case 'playing':
+          AudioManager.stopPlayback();
+          break;
+        case 'recording':
+          handleStopRecording(buttonId);
+          break;
+        case 'has-audio':
+          handlePlay(buttonId);
+          break;
+        case 'empty':
+          handleStartRecording(buttonId);
+          break;
+      }
+    });
+
+    // Drag-and-drop reorder (edit mode only)
+    let draggedCard = null;
+
+    grid.addEventListener('dragstart', (e) => {
+      if (isBigMode()) { e.preventDefault(); return; }
+      const card = e.target.closest('.voice-card');
+      if (!card) return;
+      // Prevent drag while editing label
+      if (card.querySelector('.card-label.editing')) { e.preventDefault(); return; }
+      draggedCard = card;
+      card.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+
+    grid.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (!draggedCard) return;
+      const target = e.target.closest('.voice-card');
+      if (!target || target === draggedCard) return;
+      const rect = target.getBoundingClientRect();
+      const midY = rect.top + rect.height / 2;
+      if (e.clientY < midY) {
+        grid.insertBefore(draggedCard, target);
+      } else {
+        grid.insertBefore(draggedCard, target.nextSibling);
+      }
+    });
+
+    grid.addEventListener('dragend', async () => {
+      if (!draggedCard) return;
+      draggedCard.classList.remove('dragging');
+      draggedCard = null;
+      // Persist new order
+      const cards = grid.querySelectorAll('.voice-card');
+      for (let i = 0; i < cards.length; i++) {
+        const id = cards[i].dataset.id;
+        const record = UI._buttonData.get(id);
+        if (record) {
+          record.order = i;
+          await DB.put(record);
+        }
+      }
+    });
+
+    // Open DB and render
+    try {
+      await DB.open();
+      await UI.renderAll();
+      updateStorageInfo();
+    } catch (err) {
+      console.error('Failed to initialize database:', err);
+      showToast('Failed to load data');
+    }
+  });
+
+})();
