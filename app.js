@@ -1047,14 +1047,29 @@
     grid.addEventListener('dragover', (e) => {
       e.preventDefault();
       if (!draggedCard) return;
-      const target = e.target.closest('.voice-card');
-      if (!target || target === draggedCard) return;
-      const rect = target.getBoundingClientRect();
+
+      // Find the card under the mouse cursor by checking Y position
+      const allCards = Array.from(grid.querySelectorAll('.voice-card'));
+      let targetCard = null;
+
+      for (const card of allCards) {
+        if (card === draggedCard) continue;
+        const rect = card.getBoundingClientRect();
+        // Check if mouse Y is within the card's vertical bounds
+        if (e.clientY >= rect.top && e.clientY <= rect.bottom) {
+          targetCard = card;
+          break;
+        }
+      }
+
+      if (!targetCard) return;
+
+      const rect = targetCard.getBoundingClientRect();
       const midY = rect.top + rect.height / 2;
       if (e.clientY < midY) {
-        grid.insertBefore(draggedCard, target);
+        grid.insertBefore(draggedCard, targetCard);
       } else {
-        grid.insertBefore(draggedCard, target.nextSibling);
+        grid.insertBefore(draggedCard, targetCard.nextSibling);
       }
     });
 
