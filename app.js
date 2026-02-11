@@ -1032,6 +1032,7 @@
 
     // Drag-and-drop reorder (edit mode only)
     let draggedCard = null;
+    let dragStartY = null;
 
     grid.addEventListener('dragstart', (e) => {
       if (isBigMode()) { e.preventDefault(); return; }
@@ -1040,13 +1041,14 @@
       // Prevent drag while editing label
       if (card.querySelector('.card-label.editing')) { e.preventDefault(); return; }
       draggedCard = card;
+      dragStartY = e.clientY;
       card.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
     });
 
     grid.addEventListener('dragover', (e) => {
       e.preventDefault();
-      if (!draggedCard) return;
+      if (!draggedCard || dragStartY === null) return;
 
       // Find card directly under cursor (X and Y)
       const allCards = Array.from(grid.querySelectorAll('.voice-card'));
@@ -1067,10 +1069,19 @@
 
       const rect = targetCard.getBoundingClientRect();
       const midY = rect.top + rect.height / 2;
-      if (e.clientY < midY) {
-        grid.insertBefore(draggedCard, targetCard);
+      const isDraggingDown = e.clientY > dragStartY;
+
+      // Consistent logic:
+      // - If dragging down, insert after when crossing middle
+      // - If dragging up, insert before when crossing middle
+      if (isDraggingDown) {
+        if (e.clientY > midY) {
+          grid.insertBefore(draggedCard, targetCard.nextSibling);
+        }
       } else {
-        grid.insertBefore(draggedCard, targetCard.nextSibling);
+        if (e.clientY < midY) {
+          grid.insertBefore(draggedCard, targetCard);
+        }
       }
     });
 
@@ -1078,6 +1089,7 @@
       if (!draggedCard) return;
       draggedCard.classList.remove('dragging');
       draggedCard = null;
+      dragStartY = null;
       // Persist new order
       const cards = grid.querySelectorAll('.voice-card');
       for (let i = 0; i < cards.length; i++) {
