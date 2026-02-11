@@ -1,6 +1,7 @@
 (function () {
   'use strict';
 
+  const VERSION = '0.0.1';
   const DB_NAME = 'VoiceButtonDB';
   const STORE_NAME = 'buttons';
   const MAX_BUTTONS = 9;
@@ -1294,6 +1295,17 @@
 
     // Set initial language selector value
     document.getElementById('lang-selector').value = Lang.getCurrent();
+
+    // Display version number in footer
+    const footer = document.querySelector('.footer');
+    if (footer) {
+      const versionSpan = document.createElement('span');
+      versionSpan.style.marginLeft = '1rem';
+      versionSpan.style.fontSize = '0.75rem';
+      versionSpan.style.color = '#d1d5db';
+      versionSpan.textContent = `v${VERSION}`;
+      footer.appendChild(versionSpan);
+    }
   });
 
 })();
