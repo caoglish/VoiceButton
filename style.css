@@ -24,13 +24,44 @@ body {
   background: #1a1a2e;
   color: #fff;
   padding: 1rem 1.5rem;
-  text-align: center;
+}
+
+.header-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  position: relative;
+  max-width: 960px;
+  margin: 0 auto;
 }
 
 .header h1 {
   font-size: 1.5rem;
   font-weight: 600;
   letter-spacing: 0.02em;
+}
+
+.lang-selector {
+  position: absolute;
+  right: 0;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.lang-selector:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.lang-selector option {
+  background: #1a1a2e;
+  color: #fff;
 }
 
 /* Browser Warning */
@@ -540,6 +571,21 @@ body {
   cursor: pointer;
 }
 
+/* Touch Drag */
+.voice-card.touch-dragging {
+  opacity: 0.8;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  transform: scale(1.05);
+  transition: none;
+}
+
+.drag-placeholder {
+  background: #e5e7eb;
+  border: 2px dashed #9ca3af;
+  border-radius: 12px;
+  opacity: 0.5;
+}
+
 /* Editable Label */
 .card-label.editing {
   border: 1px solid #2563eb;
@@ -552,22 +598,87 @@ body {
 
 /* Responsive */
 @media (max-width: 560px) {
+  .header {
+    padding: 0.75rem 1rem;
+  }
+
+  .header-content {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
   .header h1 {
     font-size: 1.2rem;
   }
 
+  .lang-selector {
+    position: static;
+    min-height: 44px;
+    padding: 0.5rem 0.75rem;
+  }
+
   .toolbar {
     padding: 0.75rem 1rem;
+    flex-direction: column;
+    gap: 0.75rem;
+    align-items: stretch;
+  }
+
+  .toolbar-right {
+    justify-content: space-between;
+    width: 100%;
   }
 
   .button-grid {
     padding: 0 1rem 2rem;
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    grid-template-columns: 1fr;
     gap: 0.75rem;
   }
 
   .voice-card {
     padding: 1rem;
+    min-height: 120px;
+  }
+
+  .voice-card .btn-delete {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0.5rem;
+  }
+
+  .voice-card .card-btn {
+    min-height: 44px;
+    padding: 0.5rem 1rem;
+  }
+
+  .btn {
+    min-height: 44px;
+    padding: 0.75rem 1.2rem;
+  }
+
+  .button-grid.big-mode {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .toggle-switch {
+    width: 48px;
+    height: 28px;
+  }
+
+  .toggle-slider::before {
+    width: 22px;
+    height: 22px;
+  }
+
+  .toggle-switch input:checked + .toggle-slider::before {
+    transform: translateX(20px);
+  }
+}
+
+/* Tablet devices */
+@media (min-width: 561px) and (max-width: 960px) {
+  .button-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 
   .button-grid.big-mode {

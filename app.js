@@ -6,6 +6,145 @@
   const MAX_BUTTONS = 9;
   const MIN_RECORDING_MS = 200;
 
+  // ── Translations ──
+
+  const translations = {
+    zh: {
+      appTitle: '语音按钮板',
+      addNewButton: '添加新按钮',
+      editMode: '编辑模式',
+      buttonMode: '按钮模式',
+      clickToRecord: '点击录音',
+      noRecording: '暂无录音',
+      playing: '播放中...',
+      stop: '停止',
+      record: '录音',
+      reRecord: '重新录音',
+      play: '播放',
+      modalAddTitle: '添加新按钮',
+      modalLabelText: '按钮标签',
+      cancel: '取消',
+      add: '添加',
+      modalDeleteTitle: '删除按钮',
+      modalDeleteMessage: '确定要删除 "{label}" 吗？',
+      delete: '删除',
+      footerText: '音频数据本地存储在浏览器中',
+      remaining: '剩余',
+      approxMinutes: '约',
+      minutes: '分钟',
+      recordingTooShort: '录音时间过短 — 已丢弃',
+      failedToSave: '保存录音失败',
+      playbackError: '播放错误',
+      playbackFailed: '播放失败',
+      noAudioToPlay: '没有可播放的音频',
+      maxButtonsReached: '已达到最多9个按钮',
+      failedToDelete: '删除按钮失败',
+      failedToCreate: '创建按钮失败',
+      storageQuotaExceeded: '存储空间不足',
+      micPermissionDenied: '麦克风权限被拒绝',
+      micUnavailable: '麦克风不可用',
+      warningIndexedDB: 'IndexedDB 不受支持。此应用无法存储数据。',
+      warningMediaDevices: 'MediaDevices API 不可用。录音功能将无法使用。',
+      warningMediaRecorder: 'MediaRecorder 不受支持。录音功能将无法使用。',
+      warningHTTPS: '此页面未通过 HTTPS 提供。麦克风访问可能被阻止。',
+      emptyState: '还没有按钮。点击"添加新按钮"开始使用。',
+      buttonCount: '{count} / {max}',
+      defaultButtonLabel: '按钮 {count}',
+    },
+    en: {
+      appTitle: 'Voice Button Board',
+      addNewButton: 'Add New Button',
+      editMode: 'Edit Mode',
+      buttonMode: 'Button Mode',
+      clickToRecord: 'Click to record',
+      noRecording: 'No recording',
+      playing: 'Playing...',
+      stop: 'Stop',
+      record: 'Record',
+      reRecord: 'Re-record',
+      play: 'Play',
+      modalAddTitle: 'Add New Button',
+      modalLabelText: 'Button Label',
+      cancel: 'Cancel',
+      add: 'Add',
+      modalDeleteTitle: 'Delete Button',
+      modalDeleteMessage: 'Are you sure you want to delete "{label}"?',
+      delete: 'Delete',
+      footerText: 'Audio is stored locally in your browser',
+      remaining: 'Remaining',
+      approxMinutes: 'approx',
+      minutes: 'min',
+      recordingTooShort: 'Recording too short — discarded',
+      failedToSave: 'Failed to save recording',
+      playbackError: 'Playback error',
+      playbackFailed: 'Playback failed',
+      noAudioToPlay: 'No audio to play',
+      maxButtonsReached: 'Maximum 9 buttons reached',
+      failedToDelete: 'Failed to delete button',
+      failedToCreate: 'Failed to create button',
+      storageQuotaExceeded: 'Storage quota exceeded',
+      micPermissionDenied: 'Mic permission denied',
+      micUnavailable: 'Mic unavailable',
+      warningIndexedDB: 'IndexedDB is not supported. This app cannot store data.',
+      warningMediaDevices: 'MediaDevices API not available. Recording will not work.',
+      warningMediaRecorder: 'MediaRecorder is not supported. Recording will not work.',
+      warningHTTPS: 'This page is not served over HTTPS. Microphone access may be blocked.',
+      emptyState: 'No buttons yet. Click "Add New Button" to get started.',
+      buttonCount: '{count} / {max}',
+      defaultButtonLabel: 'Button {count}',
+    }
+  };
+
+  const Lang = {
+    _current: 'zh',
+
+    init() {
+      const saved = localStorage.getItem('voiceboard-lang');
+      this._current = saved || 'zh';
+      this.updateHTML();
+    },
+
+    get(key, params = {}) {
+      let text = translations[this._current][key] || translations['en'][key] || key;
+      Object.keys(params).forEach(param => {
+        text = text.replace(`{${param}}`, params[param]);
+      });
+      return text;
+    },
+
+    switch(lang) {
+      if (lang !== 'zh' && lang !== 'en') return;
+      this._current = lang;
+      localStorage.setItem('voiceboard-lang', lang);
+      this.updateHTML();
+      UI.renderAll();
+    },
+
+    getCurrent() {
+      return this._current;
+    },
+
+    updateHTML() {
+      const h1 = document.querySelector('.header h1');
+      if (h1) h1.textContent = this.get('appTitle');
+
+      const btnAddText = document.getElementById('btn-add-text');
+      if (btnAddText) btnAddText.textContent = this.get('addNewButton');
+
+      const footer = document.querySelector('.footer');
+      if (footer) footer.textContent = this.get('footerText');
+
+      document.getElementById('modal-title').textContent = this.get('modalAddTitle');
+      document.querySelector('.modal-label').textContent = this.get('modalLabelText');
+      document.getElementById('modal-cancel').textContent = this.get('cancel');
+      document.getElementById('modal-confirm').textContent = this.get('add');
+
+      document.getElementById('delete-title').textContent = this.get('modalDeleteTitle');
+      document.getElementById('delete-cancel').textContent = this.get('cancel');
+      document.getElementById('delete-confirm').textContent = this.get('delete');
+    }
+  };
+
   // ── SVG Icons ──
 
   const Icons = {
@@ -190,7 +329,7 @@
           }
 
           if (elapsed < MIN_RECORDING_MS) {
-            showToast('Recording too short — discarded');
+            showToast(Lang.get('recordingTooShort'));
             this._cleanupRecording();
             UI.setCardState(buttonId);
             resolve(null);
@@ -213,7 +352,7 @@
             }
           } catch (err) {
             console.error('Failed to save recording:', err);
-            showToast('Failed to save recording');
+            showToast(Lang.get('failedToSave'));
           }
 
           this._cleanupRecording();
@@ -251,12 +390,12 @@
       };
 
       this._audio.onerror = () => {
-        showToast('Playback error');
+        showToast(Lang.get('playbackError'));
         this.stopPlayback();
       };
 
       this._audio.play().catch(() => {
-        showToast('Playback failed');
+        showToast(Lang.get('playbackFailed'));
         this.stopPlayback();
       });
 
@@ -392,7 +531,7 @@
       if (big) {
         switch (state) {
           case 'empty':
-            statusEl.innerHTML = '点击录音';
+            statusEl.innerHTML = Lang.get('clickToRecord');
             break;
           case 'recording':
             statusEl.innerHTML = '<span class="recording-timer">0.0s</span>';
@@ -401,13 +540,13 @@
             statusEl.textContent = this.formatDuration(data.audioDuration || 0);
             break;
           case 'playing':
-            statusEl.textContent = '播放中...';
+            statusEl.textContent = Lang.get('playing');
             break;
         }
       } else {
         switch (state) {
           case 'empty':
-            statusEl.innerHTML = 'No recording';
+            statusEl.innerHTML = Lang.get('noRecording');
             break;
           case 'recording':
             statusEl.innerHTML = '<span class="recording-timer">0.0s</span>';
@@ -416,7 +555,7 @@
             statusEl.textContent = this.formatDuration(data.audioDuration || 0);
             break;
           case 'playing':
-            statusEl.textContent = 'Playing...';
+            statusEl.textContent = Lang.get('playing');
             break;
         }
       }
@@ -429,26 +568,26 @@
       } else if (state === 'recording') {
         const stopBtn = document.createElement('button');
         stopBtn.className = 'card-btn btn-record recording';
-        stopBtn.textContent = 'Stop';
+        stopBtn.textContent = Lang.get('stop');
         stopBtn.addEventListener('click', () => handleStopRecording(buttonId));
         actionsEl.appendChild(stopBtn);
       } else {
         const recBtn = document.createElement('button');
         recBtn.className = 'card-btn btn-record';
-        recBtn.textContent = data.hasAudio ? 'Re-record' : 'Record';
+        recBtn.textContent = data.hasAudio ? Lang.get('reRecord') : Lang.get('record');
         recBtn.addEventListener('click', () => handleStartRecording(buttonId));
         actionsEl.appendChild(recBtn);
 
         if (state === 'playing') {
           const stopBtn = document.createElement('button');
           stopBtn.className = 'card-btn btn-play playing';
-          stopBtn.textContent = 'Stop';
+          stopBtn.textContent = Lang.get('stop');
           stopBtn.addEventListener('click', () => AudioManager.stopPlayback());
           actionsEl.appendChild(stopBtn);
         } else if (data.hasAudio) {
           const playBtn = document.createElement('button');
           playBtn.className = 'card-btn btn-play';
-          playBtn.textContent = 'Play';
+          playBtn.textContent = Lang.get('play');
           playBtn.addEventListener('click', () => handlePlay(buttonId));
           actionsEl.appendChild(playBtn);
         }
@@ -591,9 +730,9 @@
       const remainMB = Math.floor((quota - usage) / 1024 / 1024);
       const approxMinutes = Math.floor(remainMB / 1);
       if (remainMB > 1024) {
-        el.textContent = `剩余 ${(remainMB / 1024).toFixed(1)} GB (约 ${approxMinutes} 分钟)`;
+        el.textContent = `${Lang.get('remaining')} ${(remainMB / 1024).toFixed(1)} GB (${Lang.get('approxMinutes')} ${approxMinutes} ${Lang.get('minutes')})`;
       } else {
-        el.textContent = `剩余 ${remainMB} MB (约 ${approxMinutes} 分钟)`;
+        el.textContent = `${Lang.get('remaining')} ${remainMB} MB (${Lang.get('approxMinutes')} ${approxMinutes} ${Lang.get('minutes')})`;
       }
     } catch (err) {
       el.textContent = '';
@@ -619,9 +758,9 @@
     } catch (err) {
       console.error('Recording failed:', err);
       if (err.name === 'NotAllowedError') {
-        UI.setCardError(buttonId, 'Mic permission denied');
+        UI.setCardError(buttonId, Lang.get('micPermissionDenied'));
       } else {
-        UI.setCardError(buttonId, 'Mic unavailable');
+        UI.setCardError(buttonId, Lang.get('micUnavailable'));
       }
     }
   }
@@ -634,7 +773,7 @@
   async function handlePlay(buttonId) {
     const data = await DB.get(buttonId);
     if (!data || !data.audioBlob) {
-      showToast('No audio to play');
+      showToast(Lang.get('noAudioToPlay'));
       return;
     }
     AudioManager.startPlayback(buttonId, data.audioBlob);
@@ -642,9 +781,9 @@
 
   function handleDelete(id) {
     const data = UI._buttonData.get(id);
-    const label = data ? data.label : 'this button';
+    const label = data ? data.label : '';
     const deleteOverlay = document.getElementById('delete-overlay');
-    document.getElementById('delete-message').textContent = `Are you sure you want to delete "${label}"?`;
+    document.getElementById('delete-message').textContent = Lang.get('modalDeleteMessage', { label });
     pendingDeleteId = id;
     deleteOverlay.hidden = false;
     document.getElementById('delete-confirm').focus();
@@ -668,7 +807,7 @@
       UI.removeCard(id);
     } catch (err) {
       console.error('Failed to delete button:', err);
-      showToast('Failed to delete button');
+      showToast(Lang.get('failedToDelete'));
     }
   }
 
@@ -696,7 +835,7 @@
   function showAddModal() {
     const count = UI._buttonData.size;
     const modalInput = document.getElementById('modal-input');
-    modalInput.value = `Button ${count + 1}`;
+    modalInput.value = Lang.get('defaultButtonLabel', { count: count + 1 });
     document.getElementById('modal-overlay').hidden = false;
     modalInput.select();
     modalInput.focus();
@@ -715,7 +854,7 @@
     }
 
     if (UI._buttonData.size >= MAX_BUTTONS) {
-      showToast('Maximum 9 buttons reached');
+      showToast(Lang.get('maxButtonsReached'));
       hideAddModal();
       return;
     }
@@ -738,9 +877,9 @@
     } catch (err) {
       console.error('Failed to save button:', err);
       if (err.name === 'QuotaExceededError') {
-        showToast('Storage quota exceeded');
+        showToast(Lang.get('storageQuotaExceeded'));
       } else {
-        showToast('Failed to create button');
+        showToast(Lang.get('failedToCreate'));
       }
     }
 
@@ -753,20 +892,20 @@
     const warnings = [];
 
     if (!window.indexedDB) {
-      warnings.push('IndexedDB is not supported. This app cannot store data.');
+      warnings.push(Lang.get('warningIndexedDB'));
     }
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      warnings.push('MediaDevices API not available. Recording will not work.');
+      warnings.push(Lang.get('warningMediaDevices'));
     }
 
     if (typeof MediaRecorder === 'undefined') {
-      warnings.push('MediaRecorder is not supported. Recording will not work.');
+      warnings.push(Lang.get('warningMediaRecorder'));
     }
 
     const loc = window.location;
     if (loc.protocol !== 'https:' && loc.hostname !== 'localhost' && loc.hostname !== '127.0.0.1' && loc.protocol !== 'file:') {
-      warnings.push('This page is not served over HTTPS. Microphone access may be blocked.');
+      warnings.push(Lang.get('warningHTTPS'));
     }
 
     if (warnings.length > 0) {
@@ -843,7 +982,7 @@
     const grid = document.getElementById('button-grid');
 
     function updateModeLabel() {
-      modeLabel.textContent = modeToggle.checked ? '按钮模式' : '编辑模式';
+      modeLabel.textContent = modeToggle.checked ? Lang.get('buttonMode') : Lang.get('editMode');
     }
 
     modeToggle.addEventListener('change', () => {
@@ -935,6 +1074,172 @@
       }
     });
 
+    // Touch drag support for mobile
+    let touchDragData = {
+      card: null,
+      placeholder: null,
+      startX: 0,
+      startY: 0,
+      offsetX: 0,
+      offsetY: 0,
+      touchId: null,
+      activateTimeout: null
+    };
+
+    function findCardAtPoint(x, y, excludeCard) {
+      const cards = grid.querySelectorAll('.voice-card');
+      for (const card of cards) {
+        if (card === excludeCard) continue;
+        const rect = card.getBoundingClientRect();
+        if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+          return card;
+        }
+      }
+      return null;
+    }
+
+    grid.addEventListener('touchstart', (e) => {
+      if (isBigMode()) return;
+
+      const card = e.target.closest('.voice-card');
+      if (!card) return;
+
+      // Prevent drag while editing label
+      if (card.querySelector('.card-label.editing')) return;
+
+      // Prevent drag if touching delete button
+      if (e.target.closest('.btn-delete')) return;
+
+      const touch = e.touches[0];
+      touchDragData.touchId = touch.identifier;
+      touchDragData.card = card;
+
+      const rect = card.getBoundingClientRect();
+      touchDragData.offsetX = touch.clientX - rect.left;
+      touchDragData.offsetY = touch.clientY - rect.top;
+      touchDragData.startX = touch.clientX;
+      touchDragData.startY = touch.clientY;
+
+      // Activate drag after 200ms to avoid conflicting with taps
+      touchDragData.activateTimeout = setTimeout(() => {
+        if (touchDragData.card) {
+          touchDragData.card.classList.add('touch-dragging');
+
+          const placeholder = document.createElement('div');
+          placeholder.className = 'drag-placeholder';
+          placeholder.style.height = rect.height + 'px';
+          card.parentNode.insertBefore(placeholder, card);
+          touchDragData.placeholder = placeholder;
+
+          card.style.position = 'fixed';
+          card.style.zIndex = '1000';
+          card.style.width = rect.width + 'px';
+          card.style.left = (touch.clientX - touchDragData.offsetX) + 'px';
+          card.style.top = (touch.clientY - touchDragData.offsetY) + 'px';
+          card.style.pointerEvents = 'none';
+        }
+      }, 200);
+    }, { passive: false });
+
+    grid.addEventListener('touchmove', (e) => {
+      if (!touchDragData.card || !touchDragData.placeholder) {
+        return;
+      }
+
+      e.preventDefault();
+
+      const touch = Array.from(e.touches).find(t => t.identifier === touchDragData.touchId);
+      if (!touch) return;
+
+      const card = touchDragData.card;
+
+      card.style.left = (touch.clientX - touchDragData.offsetX) + 'px';
+      card.style.top = (touch.clientY - touchDragData.offsetY) + 'px';
+
+      const targetCard = findCardAtPoint(touch.clientX, touch.clientY, card);
+
+      if (targetCard && targetCard !== touchDragData.placeholder) {
+        const targetRect = targetCard.getBoundingClientRect();
+        const midY = targetRect.top + targetRect.height / 2;
+
+        if (touch.clientY < midY) {
+          grid.insertBefore(touchDragData.placeholder, targetCard);
+        } else {
+          grid.insertBefore(touchDragData.placeholder, targetCard.nextSibling);
+        }
+      }
+    }, { passive: false });
+
+    grid.addEventListener('touchend', async () => {
+      clearTimeout(touchDragData.activateTimeout);
+
+      if (!touchDragData.card) return;
+
+      const card = touchDragData.card;
+
+      if (touchDragData.placeholder) {
+        card.style.position = '';
+        card.style.zIndex = '';
+        card.style.width = '';
+        card.style.left = '';
+        card.style.top = '';
+        card.style.pointerEvents = '';
+        card.classList.remove('touch-dragging');
+
+        touchDragData.placeholder.parentNode.replaceChild(card, touchDragData.placeholder);
+
+        const cards = grid.querySelectorAll('.voice-card');
+        for (let i = 0; i < cards.length; i++) {
+          const id = cards[i].dataset.id;
+          const record = UI._buttonData.get(id);
+          if (record) {
+            record.order = i;
+            await DB.put(record);
+          }
+        }
+      }
+
+      touchDragData = {
+        card: null,
+        placeholder: null,
+        startX: 0,
+        startY: 0,
+        offsetX: 0,
+        offsetY: 0,
+        touchId: null,
+        activateTimeout: null
+      };
+    });
+
+    grid.addEventListener('touchcancel', () => {
+      clearTimeout(touchDragData.activateTimeout);
+
+      if (touchDragData.card) {
+        touchDragData.card.style.position = '';
+        touchDragData.card.style.zIndex = '';
+        touchDragData.card.style.width = '';
+        touchDragData.card.style.left = '';
+        touchDragData.card.style.top = '';
+        touchDragData.card.style.pointerEvents = '';
+        touchDragData.card.classList.remove('touch-dragging');
+      }
+
+      if (touchDragData.placeholder) {
+        touchDragData.placeholder.remove();
+      }
+
+      touchDragData = {
+        card: null,
+        placeholder: null,
+        startX: 0,
+        startY: 0,
+        offsetX: 0,
+        offsetY: 0,
+        touchId: null,
+        activateTimeout: null
+      };
+    });
+
     // Open DB and render
     try {
       await DB.open();
@@ -942,8 +1247,19 @@
       updateStorageInfo();
     } catch (err) {
       console.error('Failed to initialize database:', err);
-      showToast('Failed to load data');
+      showToast(Lang.get('failedToCreate'));
     }
+
+    // Initialize language system
+    Lang.init();
+
+    // Language selector event
+    document.getElementById('lang-selector').addEventListener('change', (e) => {
+      Lang.switch(e.target.value);
+    });
+
+    // Set initial language selector value
+    document.getElementById('lang-selector').value = Lang.getCurrent();
   });
 
 })();
