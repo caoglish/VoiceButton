@@ -681,13 +681,17 @@ body {
   }
 }
 
-/* Tablet devices */
+/* Tablet devices (iPad - single column) */
 @media (min-width: 561px) and (max-width: 960px) {
   .button-grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: 1fr;
+    max-width: 400px;
+    margin-left: 1.5rem;
   }
 
   .button-grid.big-mode {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: 1fr;
+    max-width: 400px;
+    margin-left: 1.5rem;
   }
 }
