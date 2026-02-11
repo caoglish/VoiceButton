@@ -1048,36 +1048,29 @@
       e.preventDefault();
       if (!draggedCard) return;
 
-      // Find the card closest to the mouse cursor
+      // Find card directly under cursor (X and Y)
       const allCards = Array.from(grid.querySelectorAll('.voice-card'));
-      let closestCard = null;
-      let closestDistance = Infinity;
+      let targetCard = null;
 
       for (const card of allCards) {
         if (card === draggedCard) continue;
         const rect = card.getBoundingClientRect();
-        // Calculate distance from mouse to card center
-        const cardCenterX = rect.left + rect.width / 2;
-        const cardCenterY = rect.top + rect.height / 2;
-        const distance = Math.sqrt(
-          Math.pow(e.clientX - cardCenterX, 2) +
-          Math.pow(e.clientY - cardCenterY, 2)
-        );
-
-        if (distance < closestDistance) {
-          closestDistance = distance;
-          closestCard = card;
+        // Only swap if cursor is directly over another card
+        if (e.clientY >= rect.top && e.clientY <= rect.bottom &&
+            e.clientX >= rect.left && e.clientX <= rect.right) {
+          targetCard = card;
+          break;
         }
       }
 
-      if (!closestCard) return;
+      if (!targetCard) return;
 
-      const rect = closestCard.getBoundingClientRect();
+      const rect = targetCard.getBoundingClientRect();
       const midY = rect.top + rect.height / 2;
       if (e.clientY < midY) {
-        grid.insertBefore(draggedCard, closestCard);
+        grid.insertBefore(draggedCard, targetCard);
       } else {
-        grid.insertBefore(draggedCard, closestCard.nextSibling);
+        grid.insertBefore(draggedCard, targetCard.nextSibling);
       }
     });
 
