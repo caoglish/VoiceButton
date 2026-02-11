@@ -1178,16 +1178,21 @@
       const card = touchDragData.card;
 
       if (touchDragData.placeholder) {
-        card.style.position = '';
-        card.style.zIndex = '';
-        card.style.width = '';
-        card.style.left = '';
-        card.style.top = '';
-        card.style.pointerEvents = '';
+        // Fully reset all inline styles
+        card.style.position = 'relative';
+        card.style.zIndex = 'auto';
+        card.style.width = 'auto';
+        card.style.left = 'auto';
+        card.style.top = 'auto';
+        card.style.pointerEvents = 'auto';
         card.classList.remove('touch-dragging');
 
-        touchDragData.placeholder.parentNode.replaceChild(card, touchDragData.placeholder);
+        // Replace placeholder with card
+        if (touchDragData.placeholder.parentNode) {
+          touchDragData.placeholder.parentNode.replaceChild(card, touchDragData.placeholder);
+        }
 
+        // Persist new order
         const cards = grid.querySelectorAll('.voice-card');
         for (let i = 0; i < cards.length; i++) {
           const id = cards[i].dataset.id;
@@ -1215,17 +1220,18 @@
       clearTimeout(touchDragData.activateTimeout);
 
       if (touchDragData.card) {
-        touchDragData.card.style.position = '';
-        touchDragData.card.style.zIndex = '';
-        touchDragData.card.style.width = '';
-        touchDragData.card.style.left = '';
-        touchDragData.card.style.top = '';
-        touchDragData.card.style.pointerEvents = '';
+        // Fully reset all inline styles
+        touchDragData.card.style.position = 'relative';
+        touchDragData.card.style.zIndex = 'auto';
+        touchDragData.card.style.width = 'auto';
+        touchDragData.card.style.left = 'auto';
+        touchDragData.card.style.top = 'auto';
+        touchDragData.card.style.pointerEvents = 'auto';
         touchDragData.card.classList.remove('touch-dragging');
       }
 
-      if (touchDragData.placeholder) {
-        touchDragData.placeholder.remove();
+      if (touchDragData.placeholder && touchDragData.placeholder.parentNode) {
+        touchDragData.placeholder.parentNode.removeChild(touchDragData.placeholder);
       }
 
       touchDragData = {
