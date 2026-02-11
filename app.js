@@ -1048,28 +1048,36 @@
       e.preventDefault();
       if (!draggedCard) return;
 
-      // Find the card under the mouse cursor by checking Y position
+      // Find the card closest to the mouse cursor
       const allCards = Array.from(grid.querySelectorAll('.voice-card'));
-      let targetCard = null;
+      let closestCard = null;
+      let closestDistance = Infinity;
 
       for (const card of allCards) {
         if (card === draggedCard) continue;
         const rect = card.getBoundingClientRect();
-        // Check if mouse Y is within the card's vertical bounds
-        if (e.clientY >= rect.top && e.clientY <= rect.bottom) {
-          targetCard = card;
-          break;
+        // Calculate distance from mouse to card center
+        const cardCenterX = rect.left + rect.width / 2;
+        const cardCenterY = rect.top + rect.height / 2;
+        const distance = Math.sqrt(
+          Math.pow(e.clientX - cardCenterX, 2) +
+          Math.pow(e.clientY - cardCenterY, 2)
+        );
+
+        if (distance < closestDistance) {
+          closestDistance = distance;
+          closestCard = card;
         }
       }
 
-      if (!targetCard) return;
+      if (!closestCard) return;
 
-      const rect = targetCard.getBoundingClientRect();
+      const rect = closestCard.getBoundingClientRect();
       const midY = rect.top + rect.height / 2;
       if (e.clientY < midY) {
-        grid.insertBefore(draggedCard, targetCard);
+        grid.insertBefore(draggedCard, closestCard);
       } else {
-        grid.insertBefore(draggedCard, targetCard.nextSibling);
+        grid.insertBefore(draggedCard, closestCard.nextSibling);
       }
     });
 
