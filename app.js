@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '0.1.3';
+  const VERSION = '0.2.5';
   const DB_NAME = 'VoiceButtonDB';
   const STORE_NAME = 'buttons';
   const MAX_BUTTONS = 9;
@@ -372,6 +372,9 @@
           const audioBlob = new Blob(this._chunks, { type: mimeType });
           const audioDuration = elapsed;
 
+          // Convert to ArrayBuffer for reliable storage in IndexedDB (mobile compatibility)
+          const arrayBuffer = await audioBlob.arrayBuffer();
+
           try {
             const record = await DB.get(buttonId);
             if (record) {
@@ -384,7 +387,7 @@
                   const recordingId = 'rec_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
                   record.recordings.push({
                     id: recordingId,
-                    blob: audioBlob,
+                    arrayBuffer: arrayBuffer, // Store as ArrayBuffer instead of Blob
                     duration: audioDuration,
                     mimeType: mimeType,
                     createdAt: new Date().toISOString()
@@ -396,7 +399,7 @@
               } else {
                 // Single-voice button: replace the recording
                 record.hasAudio = true;
-                record.audioBlob = audioBlob;
+                record.audioArrayBuffer = arrayBuffer; // Store as ArrayBuffer instead of Blob
                 record.audioDuration = audioDuration;
                 record.mimeType = mimeType;
                 await DB.put(record);
@@ -488,6 +491,12 @@
       }
       this._playingButtonId = null;
       if (buttonId) UI.setCardState(buttonId);
+    },
+
+    async stopPlaybackAsync() {
+      this.stopPlayback();
+      // Wait for resources to be fully released on mobile (increased delay)
+      await new Promise(resolve => setTimeout(resolve, 300));
     },
 
     reset() {
@@ -975,6 +984,30 @@
     }
   }
 
+  // ── Helper Functions ──
+
+  // Create blob with retry for mobile compatibility
+  async function createBlobWithRetry(buffer, mimeType, maxRetries = 3) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`[createBlobWithRetry] Attempt ${attempt}/${maxRetries}`);
+        const blob = new Blob([buffer], { type: mimeType });
+        console.log('[createBlobWithRetry] Success');
+        return blob;
+      } catch (error) {
+        console.error(`[createBlobWithRetry] Attempt ${attempt} failed:`, error);
+        if (attempt < maxRetries) {
+          // Wait before retry (exponential backoff)
+          const delay = attempt * 100;
+          console.log(`[createBlobWithRetry] Waiting ${delay}ms before retry`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        } else {
+          throw error; // Re-throw on final attempt
+        }
+      }
+    }
+  }
+
   // ── Event Handlers ──
 
   async function handleStartRecording(buttonId) {
@@ -1007,83 +1040,190 @@
   }
 
   async function handlePlay(buttonId) {
-    const data = await DB.get(buttonId);
-    if (!data) {
-      showToast(Lang.get('noAudioToPlay'));
+    // Prevent rapid double-clicks while loading audio
+    if (loadingButtonId === buttonId) {
+      console.log('[handlePlay] Already loading:', buttonId);
       return;
     }
 
-    if (data.type === 'multi') {
-      // For multi-voice button, play random recording with history avoidance
-      if (!data.recordings || data.recordings.length === 0) {
+    // Stop current playback if playing, allow new playback to start
+    if (AudioManager.isPlaying()) {
+      console.log('[handlePlay] Stopping current playback and waiting for cleanup');
+      await AudioManager.stopPlaybackAsync();
+      console.log('[handlePlay] Cleanup complete');
+    }
+
+    // Block if recording
+    if (AudioManager.isRecording()) {
+      console.log('[handlePlay] Cannot play while recording');
+      return;
+    }
+
+    console.log('[handlePlay] Starting play for:', buttonId);
+    loadingButtonId = buttonId;
+
+    try {
+      const data = await DB.get(buttonId);
+      if (!data) {
+        console.log('[handlePlay] No data found');
         showToast(Lang.get('noAudioToPlay'));
         return;
       }
 
-      // Initialize play history if not exists
-      if (!data.playHistory) {
-        data.playHistory = [];
+      if (data.type === 'multi') {
+        // For multi-voice button, play random recording with history avoidance
+        if (!data.recordings || data.recordings.length === 0) {
+          showToast(Lang.get('noAudioToPlay'));
+          return;
+        }
+
+        // Initialize play history if not exists
+        if (!data.playHistory) {
+          data.playHistory = [];
+        }
+
+        // Determine history size based on number of recordings
+        // For 2 recordings: keep last 1 (avoid immediate repeat)
+        // For 3+ recordings: keep last 2 (avoid repeat within 2-3 clicks)
+        const historySize = data.recordings.length >= 3 ? 2 : 1;
+
+        // Get available recordings (exclude recent history)
+        let availableRecordings = data.recordings.filter(rec =>
+          !data.playHistory.includes(rec.id)
+        );
+
+        // If all recordings are in history, reset and use all
+        if (availableRecordings.length === 0) {
+          availableRecordings = data.recordings;
+          data.playHistory = [];
+        }
+
+        // Select random recording from available ones
+        const randomIndex = Math.floor(Math.random() * availableRecordings.length);
+        const recording = availableRecordings[randomIndex];
+
+        // Create blob from stored ArrayBuffer (mobile-compatible)
+        console.log('[handlePlay] Creating blob from ArrayBuffer');
+        const arrayBuffer = recording.arrayBuffer || recording.blob?.arrayBuffer?.(); // Support both old and new format
+        if (!arrayBuffer) {
+          console.error('[handlePlay] No arrayBuffer found in recording');
+          showToast(Lang.get('noAudioToPlay'));
+          return;
+        }
+        // If it's a promise (old format with blob), await it
+        let buffer = arrayBuffer instanceof Promise ? await arrayBuffer : arrayBuffer;
+
+        // Validate buffer
+        console.log('[handlePlay] Buffer type:', buffer?.constructor?.name, 'Size:', buffer?.byteLength);
+        if (!buffer || buffer.byteLength === undefined || buffer.byteLength === 0) {
+          console.error('[handlePlay] Invalid buffer:', buffer);
+          showToast(Lang.get('noAudioToPlay'));
+          return;
+        }
+
+        // CRITICAL: Copy ArrayBuffer to break IndexedDB reference (mobile fix)
+        console.log('[handlePlay] Copying ArrayBuffer to break reference');
+        try {
+          // Use Uint8Array for more reliable copy on mobile
+          const uint8Array = new Uint8Array(buffer);
+          console.log('[handlePlay] Uint8Array created, length:', uint8Array.length);
+          buffer = uint8Array.buffer;
+          console.log('[handlePlay] ArrayBuffer copied, size:', buffer.byteLength);
+        } catch (e) {
+          console.error('[handlePlay] Failed to copy ArrayBuffer:', e);
+          throw e;
+        }
+
+        console.log('[handlePlay] Creating Blob from buffer with retry');
+        const blobToPlay = await createBlobWithRetry(buffer, recording.mimeType);
+        console.log('[handlePlay] Blob created successfully');
+
+        // Update play history
+        data.playHistory.push(recording.id);
+        if (data.playHistory.length > historySize) {
+          data.playHistory.shift(); // Remove oldest entry
+        }
+
+        // Save updated history to database asynchronously (don't block playback)
+        DB.put(data).catch(err => console.error('Failed to save play history:', err));
+
+        console.log('[handlePlay] Starting playback');
+        AudioManager.startPlayback(buttonId, blobToPlay);
+        console.log('[handlePlay] Playback started successfully');
+      } else {
+        // For single-voice button
+        const arrayBuffer = data.audioArrayBuffer || data.audioBlob?.arrayBuffer?.(); // Support both old and new format
+        if (!arrayBuffer) {
+          showToast(Lang.get('noAudioToPlay'));
+          return;
+        }
+        // Create blob from stored ArrayBuffer (mobile-compatible)
+        console.log('[handlePlay] Creating single-voice blob from ArrayBuffer');
+        let buffer = arrayBuffer instanceof Promise ? await arrayBuffer : arrayBuffer;
+        // CRITICAL: Copy ArrayBuffer to break IndexedDB reference (mobile fix)
+        buffer = new Uint8Array(buffer).buffer;
+        const blobToPlay = await createBlobWithRetry(buffer, data.mimeType || 'audio/webm');
+        console.log('[handlePlay] Starting single-voice playback');
+        AudioManager.startPlayback(buttonId, blobToPlay);
       }
-
-      // Determine history size based on number of recordings
-      // For 2 recordings: keep last 1 (avoid immediate repeat)
-      // For 3+ recordings: keep last 2 (avoid repeat within 2-3 clicks)
-      const historySize = data.recordings.length >= 3 ? 2 : 1;
-
-      // Get available recordings (exclude recent history)
-      let availableRecordings = data.recordings.filter(rec =>
-        !data.playHistory.includes(rec.id)
-      );
-
-      // If all recordings are in history, reset and use all
-      if (availableRecordings.length === 0) {
-        availableRecordings = data.recordings;
-        data.playHistory = [];
-      }
-
-      // Select random recording from available ones
-      const randomIndex = Math.floor(Math.random() * availableRecordings.length);
-      const recording = availableRecordings[randomIndex];
-
-      // Clone the blob to avoid issues with IndexedDB references on mobile
-      const blobToPlay = new Blob([recording.blob], { type: recording.mimeType });
-
-      // Update play history
-      data.playHistory.push(recording.id);
-      if (data.playHistory.length > historySize) {
-        data.playHistory.shift(); // Remove oldest entry
-      }
-
-      // Save updated history to database asynchronously (don't block playback)
-      DB.put(data).catch(err => console.error('Failed to save play history:', err));
-
-      AudioManager.startPlayback(buttonId, blobToPlay);
-    } else {
-      // For single-voice button
-      if (!data.audioBlob) {
-        showToast(Lang.get('noAudioToPlay'));
-        return;
-      }
-      // Clone the blob to avoid issues with IndexedDB references on mobile
-      const blobToPlay = new Blob([data.audioBlob], { type: data.mimeType || 'audio/webm' });
-      AudioManager.startPlayback(buttonId, blobToPlay);
+    } catch (error) {
+      console.error('[handlePlay] Error:', error);
+      showToast(Lang.get('playbackFailed'));
+    } finally {
+      console.log('[handlePlay] Clearing loading state');
+      loadingButtonId = null;
     }
   }
 
   async function handlePlayMultiRecording(buttonId, recordingId) {
-    const data = await DB.get(buttonId);
-    if (!data || !data.recordings) {
-      showToast(Lang.get('noAudioToPlay'));
+    // Prevent rapid double-clicks
+    if (loadingButtonId === buttonId) {
+      console.log('[handlePlayMultiRecording] Already loading:', buttonId);
       return;
     }
-    const recording = data.recordings.find(r => r.id === recordingId);
-    if (!recording) {
-      showToast(Lang.get('noAudioToPlay'));
+
+    // Stop current playback if playing
+    if (AudioManager.isPlaying()) {
+      console.log('[handlePlayMultiRecording] Stopping current playback');
+      await AudioManager.stopPlaybackAsync();
+    }
+
+    if (AudioManager.isRecording()) {
       return;
     }
-    // Clone the blob to avoid issues with IndexedDB references on mobile
-    const blobToPlay = new Blob([recording.blob], { type: recording.mimeType });
-    AudioManager.startPlayback(buttonId, blobToPlay);
+
+    console.log('[handlePlayMultiRecording] Starting:', buttonId, recordingId);
+    loadingButtonId = buttonId;
+
+    try {
+      const data = await DB.get(buttonId);
+      if (!data || !data.recordings) {
+        showToast(Lang.get('noAudioToPlay'));
+        return;
+      }
+      const recording = data.recordings.find(r => r.id === recordingId);
+      if (!recording) {
+        showToast(Lang.get('noAudioToPlay'));
+        return;
+      }
+      // Create blob from stored ArrayBuffer (mobile-compatible)
+      const arrayBuffer = recording.arrayBuffer || recording.blob?.arrayBuffer?.();
+      if (!arrayBuffer) {
+        showToast(Lang.get('noAudioToPlay'));
+        return;
+      }
+      let buffer = arrayBuffer instanceof Promise ? await arrayBuffer : arrayBuffer;
+      // CRITICAL: Copy ArrayBuffer to break IndexedDB reference (mobile fix)
+      buffer = new Uint8Array(buffer).buffer;
+      const blobToPlay = await createBlobWithRetry(buffer, recording.mimeType);
+      AudioManager.startPlayback(buttonId, blobToPlay);
+    } catch (error) {
+      console.error('[handlePlayMultiRecording] Error:', error);
+      showToast(Lang.get('playbackFailed'));
+    } finally {
+      console.log('[handlePlayMultiRecording] Clearing loading state');
+      loadingButtonId = null;
+    }
   }
 
   async function handleDeleteRecording(buttonId, recordingId) {
@@ -1139,6 +1279,7 @@
 
   let toastTimer = null;
   let pendingDeleteId = null;
+  let loadingButtonId = null; // Track button currently loading audio
 
   function showToast(msg) {
     const toast = document.getElementById('toast');
