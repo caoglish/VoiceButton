@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '0.1.1';
+  const VERSION = '0.1.2';
   const DB_NAME = 'VoiceButtonDB';
   const STORE_NAME = 'buttons';
   const MAX_BUTTONS = 9;
@@ -434,25 +434,41 @@
       if (this.isRecording()) return;
       if (this.isPlaying()) this.stopPlayback();
 
-      this._objectUrl = URL.createObjectURL(blob);
-      this._audio = new Audio(this._objectUrl);
-      this._playingButtonId = buttonId;
+      try {
+        this._objectUrl = URL.createObjectURL(blob);
+        this._audio = new Audio();
+        this._playingButtonId = buttonId;
 
-      this._audio.onended = () => {
-        this.stopPlayback();
-      };
+        this._audio.onended = () => {
+          this.stopPlayback();
+        };
 
-      this._audio.onerror = () => {
-        showToast(Lang.get('playbackError'));
-        this.stopPlayback();
-      };
+        this._audio.onerror = (e) => {
+          console.error('Audio playback error:', e);
+          showToast(Lang.get('playbackError'));
+          this.stopPlayback();
+        };
 
-      this._audio.play().catch(() => {
+        // Set src after event listeners are attached
+        this._audio.src = this._objectUrl;
+        this._audio.load();
+
+        this._audio.play().catch((err) => {
+          console.error('Play failed:', err);
+          showToast(Lang.get('playbackFailed'));
+          this.stopPlayback();
+        });
+
+        UI.setCardState(buttonId);
+      } catch (err) {
+        console.error('Failed to create playback:', err);
         showToast(Lang.get('playbackFailed'));
-        this.stopPlayback();
-      });
-
-      UI.setCardState(buttonId);
+        if (this._objectUrl) {
+          URL.revokeObjectURL(this._objectUrl);
+          this._objectUrl = null;
+        }
+        this._playingButtonId = null;
+      }
     },
 
     stopPlayback() {
@@ -461,6 +477,9 @@
         this._audio.pause();
         this._audio.onended = null;
         this._audio.onerror = null;
+        // Force release audio resources
+        this._audio.src = '';
+        this._audio.load();
         this._audio = null;
       }
       if (this._objectUrl) {
@@ -469,6 +488,29 @@
       }
       this._playingButtonId = null;
       if (buttonId) UI.setCardState(buttonId);
+    },
+
+    reset() {
+      // Force stop and cleanup everything
+      if (this.isPlaying()) {
+        this.stopPlayback();
+      }
+      if (this.isRecording()) {
+        this.stopRecording();
+      }
+      // Clear all state
+      this._audio = null;
+      this._objectUrl = null;
+      this._playingButtonId = null;
+      this._recorder = null;
+      this._stream = null;
+      this._chunks = [];
+      this._recordingButtonId = null;
+      this._recordStartTime = null;
+      if (this._timerInterval) {
+        clearInterval(this._timerInterval);
+        this._timerInterval = null;
+      }
     },
   };
 
@@ -1210,9 +1252,28 @@
     }
   });
 
+  // ── Page Visibility Cleanup (important for mobile) ──
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      // Page is hidden (user switched tabs or app went to background)
+      // Stop all audio operations to free resources on mobile
+      if (AudioManager.isPlaying()) {
+        AudioManager.stopPlayback();
+      }
+      if (AudioManager.isRecording()) {
+        AudioManager.stopRecording();
+      }
+    }
+  });
+
   // ── Init ──
 
   document.addEventListener('DOMContentLoaded', async () => {
+    // Clean up any residual audio resources on page load/refresh
+    // This ensures a fresh start and allows refresh to recover from issues
+    AudioManager.reset();
+
     checkBrowserSupport();
     UI.init();
 
