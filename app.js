@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '0.1.2';
+  const VERSION = '0.1.3';
   const DB_NAME = 'VoiceButtonDB';
   const STORE_NAME = 'buttons';
   const MAX_BUTTONS = 9;
@@ -1045,23 +1045,28 @@
       const randomIndex = Math.floor(Math.random() * availableRecordings.length);
       const recording = availableRecordings[randomIndex];
 
+      // Clone the blob to avoid issues with IndexedDB references on mobile
+      const blobToPlay = new Blob([recording.blob], { type: recording.mimeType });
+
       // Update play history
       data.playHistory.push(recording.id);
       if (data.playHistory.length > historySize) {
         data.playHistory.shift(); // Remove oldest entry
       }
 
-      // Save updated history to database
-      await DB.put(data);
+      // Save updated history to database asynchronously (don't block playback)
+      DB.put(data).catch(err => console.error('Failed to save play history:', err));
 
-      AudioManager.startPlayback(buttonId, recording.blob);
+      AudioManager.startPlayback(buttonId, blobToPlay);
     } else {
       // For single-voice button
       if (!data.audioBlob) {
         showToast(Lang.get('noAudioToPlay'));
         return;
       }
-      AudioManager.startPlayback(buttonId, data.audioBlob);
+      // Clone the blob to avoid issues with IndexedDB references on mobile
+      const blobToPlay = new Blob([data.audioBlob], { type: data.mimeType || 'audio/webm' });
+      AudioManager.startPlayback(buttonId, blobToPlay);
     }
   }
 
@@ -1076,7 +1081,9 @@
       showToast(Lang.get('noAudioToPlay'));
       return;
     }
-    AudioManager.startPlayback(buttonId, recording.blob);
+    // Clone the blob to avoid issues with IndexedDB references on mobile
+    const blobToPlay = new Blob([recording.blob], { type: recording.mimeType });
+    AudioManager.startPlayback(buttonId, blobToPlay);
   }
 
   async function handleDeleteRecording(buttonId, recordingId) {
