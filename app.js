@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '0.2.5';
+  const VERSION = '0.3.0';
   const DB_NAME = 'VoiceButtonDB';
   const STORE_NAME = 'buttons';
   const MAX_BUTTONS = 9;
@@ -470,6 +470,43 @@
           URL.revokeObjectURL(this._objectUrl);
           this._objectUrl = null;
         }
+        this._playingButtonId = null;
+      }
+    },
+
+    // New method for playing from data URL (mobile-friendly, no Blob creation needed)
+    startPlaybackFromURL(buttonId, dataURL) {
+      if (this.isRecording()) return;
+      if (this.isPlaying()) this.stopPlayback();
+
+      try {
+        this._audio = new Audio();
+        this._playingButtonId = buttonId;
+
+        this._audio.onended = () => {
+          this.stopPlayback();
+        };
+
+        this._audio.onerror = (e) => {
+          console.error('Audio playback error:', e);
+          showToast(Lang.get('playbackError'));
+          this.stopPlayback();
+        };
+
+        // Use data URL directly (no object URL needed)
+        this._audio.src = dataURL;
+        this._audio.load();
+
+        this._audio.play().catch((err) => {
+          console.error('Play failed:', err);
+          showToast(Lang.get('playbackFailed'));
+          this.stopPlayback();
+        });
+
+        UI.setCardState(buttonId);
+      } catch (err) {
+        console.error('Failed to create playback from URL:', err);
+        showToast(Lang.get('playbackFailed'));
         this._playingButtonId = null;
       }
     },
@@ -1039,6 +1076,61 @@
     UI.setCardState(buttonId);
   }
 
+  // Helper function to convert ArrayBuffer to data URL
+  function arrayBufferToDataURL(buffer, mimeType) {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    const base64 = btoa(binary);
+    return `data:${mimeType};base64,${base64}`;
+  }
+
+  // Helper function to prepare recordings with data URLs
+  async function prepareRecordingsWithDataURL(data) {
+    console.log('[prepareRecordings] Starting, type:', data.type);
+    if (data.type === 'multi' && data.recordings) {
+      console.log('[prepareRecordings] Multi-voice, recordings count:', data.recordings.length);
+      // Convert each recording's ArrayBuffer to data URL if not already done
+      for (const recording of data.recordings) {
+        console.log('[prepareRecordings] Recording:', recording.id, 'has arrayBuffer:', !!recording.arrayBuffer, 'has blob:', !!recording.blob, 'has dataURL:', !!recording.dataURL);
+        if (!recording.dataURL) {
+          if (recording.arrayBuffer) {
+            console.log('[prepareRecordings] Converting recording from arrayBuffer to data URL:', recording.id);
+            recording.dataURL = arrayBufferToDataURL(recording.arrayBuffer, recording.mimeType);
+            console.log('[prepareRecordings] Converted, dataURL length:', recording.dataURL?.length);
+          } else if (recording.blob) {
+            // Handle old format with Blob - convert to ArrayBuffer first
+            console.log('[prepareRecordings] Converting old blob format to data URL:', recording.id);
+            recording.arrayBuffer = await recording.blob.arrayBuffer();
+            recording.dataURL = arrayBufferToDataURL(recording.arrayBuffer, recording.mimeType);
+            console.log('[prepareRecordings] Converted, dataURL length:', recording.dataURL?.length);
+          }
+        }
+      }
+    } else if (data.type === 'single' && !data.audioDataURL) {
+      if (data.audioArrayBuffer) {
+        // Convert single audio to data URL
+        console.log('[prepareRecordings] Converting single audio from arrayBuffer to data URL');
+        data.audioDataURL = arrayBufferToDataURL(data.audioArrayBuffer, data.mimeType || 'audio/webm');
+        console.log('[prepareRecordings] Converted, dataURL length:', data.audioDataURL?.length);
+      } else if (data.audioBlob) {
+        // Handle old format with Blob
+        console.log('[prepareRecordings] Converting single audio from old blob format to data URL');
+        data.audioArrayBuffer = await data.audioBlob.arrayBuffer();
+        data.audioDataURL = arrayBufferToDataURL(data.audioArrayBuffer, data.mimeType || 'audio/webm');
+        console.log('[prepareRecordings] Converted, dataURL length:', data.audioDataURL?.length);
+      }
+    } else {
+      console.log('[prepareRecordings] No conversion needed or no data available');
+      console.log('[prepareRecordings] Has audioArrayBuffer:', !!data.audioArrayBuffer);
+      console.log('[prepareRecordings] Has audioBlob:', !!data.audioBlob);
+      console.log('[prepareRecordings] Has audioDataURL:', !!data.audioDataURL);
+    }
+    return data;
+  }
+
   async function handlePlay(buttonId) {
     // Prevent rapid double-clicks while loading audio
     if (loadingButtonId === buttonId) {
@@ -1063,11 +1155,38 @@
     loadingButtonId = buttonId;
 
     try {
-      const data = await DB.get(buttonId);
-      if (!data) {
-        console.log('[handlePlay] No data found');
-        showToast(Lang.get('noAudioToPlay'));
-        return;
+      // Try to get cached data first, fallback to DB
+      let data = UI._buttonData.get(buttonId);
+
+      // Check if we need to load/reload data
+      const needsReload = !data ||
+        (data.type === 'multi' && (!data.recordings || data.recordings.length === 0)) ||
+        (data.type === 'single' && !data.audioArrayBuffer && !data.audioBlob);
+
+      // Check if cached data needs data URL preparation
+      const needsDataURL = data && (
+        (data.type === 'multi' && data.recordings && data.recordings.length > 0 && !data.recordings[0].dataURL) ||
+        (data.type === 'single' && (data.audioArrayBuffer || data.audioBlob) && !data.audioDataURL)
+      );
+
+      if (needsReload) {
+        console.log('[handlePlay] Loading from DB');
+        data = await DB.get(buttonId);
+        if (!data) {
+          console.log('[handlePlay] No data found');
+          showToast(Lang.get('noAudioToPlay'));
+          return;
+        }
+        // Prepare data URLs and cache
+        console.log('[handlePlay] Preparing data URLs for cache');
+        data = await prepareRecordingsWithDataURL(data);
+        UI._buttonData.set(buttonId, data);
+      } else if (needsDataURL) {
+        console.log('[handlePlay] Cached data needs data URL preparation');
+        data = await prepareRecordingsWithDataURL(data);
+        UI._buttonData.set(buttonId, data);
+      } else {
+        console.log('[handlePlay] Using cached data with data URL');
       }
 
       if (data.type === 'multi') {
@@ -1102,41 +1221,13 @@
         const randomIndex = Math.floor(Math.random() * availableRecordings.length);
         const recording = availableRecordings[randomIndex];
 
-        // Create blob from stored ArrayBuffer (mobile-compatible)
-        console.log('[handlePlay] Creating blob from ArrayBuffer');
-        const arrayBuffer = recording.arrayBuffer || recording.blob?.arrayBuffer?.(); // Support both old and new format
-        if (!arrayBuffer) {
-          console.error('[handlePlay] No arrayBuffer found in recording');
+        // Use data URL for playback (mobile-friendly, no IndexedDB reference issues)
+        console.log('[handlePlay] Using data URL for playback');
+        if (!recording.dataURL) {
+          console.error('[handlePlay] No dataURL found');
           showToast(Lang.get('noAudioToPlay'));
           return;
         }
-        // If it's a promise (old format with blob), await it
-        let buffer = arrayBuffer instanceof Promise ? await arrayBuffer : arrayBuffer;
-
-        // Validate buffer
-        console.log('[handlePlay] Buffer type:', buffer?.constructor?.name, 'Size:', buffer?.byteLength);
-        if (!buffer || buffer.byteLength === undefined || buffer.byteLength === 0) {
-          console.error('[handlePlay] Invalid buffer:', buffer);
-          showToast(Lang.get('noAudioToPlay'));
-          return;
-        }
-
-        // CRITICAL: Copy ArrayBuffer to break IndexedDB reference (mobile fix)
-        console.log('[handlePlay] Copying ArrayBuffer to break reference');
-        try {
-          // Use Uint8Array for more reliable copy on mobile
-          const uint8Array = new Uint8Array(buffer);
-          console.log('[handlePlay] Uint8Array created, length:', uint8Array.length);
-          buffer = uint8Array.buffer;
-          console.log('[handlePlay] ArrayBuffer copied, size:', buffer.byteLength);
-        } catch (e) {
-          console.error('[handlePlay] Failed to copy ArrayBuffer:', e);
-          throw e;
-        }
-
-        console.log('[handlePlay] Creating Blob from buffer with retry');
-        const blobToPlay = await createBlobWithRetry(buffer, recording.mimeType);
-        console.log('[handlePlay] Blob created successfully');
 
         // Update play history
         data.playHistory.push(recording.id);
@@ -1147,24 +1238,17 @@
         // Save updated history to database asynchronously (don't block playback)
         DB.put(data).catch(err => console.error('Failed to save play history:', err));
 
-        console.log('[handlePlay] Starting playback');
-        AudioManager.startPlayback(buttonId, blobToPlay);
+        console.log('[handlePlay] Starting playback with data URL');
+        AudioManager.startPlaybackFromURL(buttonId, recording.dataURL);
         console.log('[handlePlay] Playback started successfully');
       } else {
         // For single-voice button
-        const arrayBuffer = data.audioArrayBuffer || data.audioBlob?.arrayBuffer?.(); // Support both old and new format
-        if (!arrayBuffer) {
+        if (!data.audioDataURL) {
           showToast(Lang.get('noAudioToPlay'));
           return;
         }
-        // Create blob from stored ArrayBuffer (mobile-compatible)
-        console.log('[handlePlay] Creating single-voice blob from ArrayBuffer');
-        let buffer = arrayBuffer instanceof Promise ? await arrayBuffer : arrayBuffer;
-        // CRITICAL: Copy ArrayBuffer to break IndexedDB reference (mobile fix)
-        buffer = new Uint8Array(buffer).buffer;
-        const blobToPlay = await createBlobWithRetry(buffer, data.mimeType || 'audio/webm');
-        console.log('[handlePlay] Starting single-voice playback');
-        AudioManager.startPlayback(buttonId, blobToPlay);
+        console.log('[handlePlay] Starting single-voice playback with data URL');
+        AudioManager.startPlaybackFromURL(buttonId, data.audioDataURL);
       }
     } catch (error) {
       console.error('[handlePlay] Error:', error);
@@ -1196,27 +1280,43 @@
     loadingButtonId = buttonId;
 
     try {
-      const data = await DB.get(buttonId);
+      // Try cached data first
+      let data = UI._buttonData.get(buttonId);
+
+      // Check if we need to load/reload or prepare data URLs
+      if (!data || !data.recordings) {
+        console.log('[handlePlayMultiRecording] Loading from DB');
+        data = await DB.get(buttonId);
+        if (data) {
+          data = await prepareRecordingsWithDataURL(data);
+          UI._buttonData.set(buttonId, data);
+        }
+      } else if (data.recordings.length > 0 && !data.recordings[0].dataURL) {
+        console.log('[handlePlayMultiRecording] Preparing data URLs for cached data');
+        data = await prepareRecordingsWithDataURL(data);
+        UI._buttonData.set(buttonId, data);
+      }
+
       if (!data || !data.recordings) {
         showToast(Lang.get('noAudioToPlay'));
         return;
       }
+
       const recording = data.recordings.find(r => r.id === recordingId);
       if (!recording) {
         showToast(Lang.get('noAudioToPlay'));
         return;
       }
-      // Create blob from stored ArrayBuffer (mobile-compatible)
-      const arrayBuffer = recording.arrayBuffer || recording.blob?.arrayBuffer?.();
-      if (!arrayBuffer) {
+
+      // Use data URL for playback (mobile-friendly)
+      if (!recording.dataURL) {
+        console.error('[handlePlayMultiRecording] No dataURL found');
         showToast(Lang.get('noAudioToPlay'));
         return;
       }
-      let buffer = arrayBuffer instanceof Promise ? await arrayBuffer : arrayBuffer;
-      // CRITICAL: Copy ArrayBuffer to break IndexedDB reference (mobile fix)
-      buffer = new Uint8Array(buffer).buffer;
-      const blobToPlay = await createBlobWithRetry(buffer, recording.mimeType);
-      AudioManager.startPlayback(buttonId, blobToPlay);
+
+      console.log('[handlePlayMultiRecording] Starting playback with data URL');
+      AudioManager.startPlaybackFromURL(buttonId, recording.dataURL);
     } catch (error) {
       console.error('[handlePlayMultiRecording] Error:', error);
       showToast(Lang.get('playbackFailed'));
