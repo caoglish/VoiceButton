@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Voice Button Board is a vanilla JavaScript web application for recording and playing back voice snippets. It runs entirely in the browser with no build process or dependencies—just open `index.html` in a modern browser.
 
+**Current Version**: 0.3.0 (Mobile-optimized with data URL playback)
+
 ## Architecture
 
 ### File Structure
@@ -22,7 +24,11 @@ The application uses a modular pattern with isolated objects:
 2. **Icons** - SVG icon definitions as template strings
 3. **DB** - IndexedDB wrapper for persistent storage (database name: `VoiceButtonDB`, store: `buttons`)
 4. **AudioManager** - Manages MediaRecorder for recording and HTMLAudioElement for playback
+   - `startPlayback(buttonId, blob)` - Legacy method using Blob + object URL
+   - `startPlaybackFromURL(buttonId, dataURL)` - Preferred method for mobile (v0.3.0+)
+   - `stopPlayback()` / `stopPlaybackAsync()` - Cleanup and state management
 5. **UI** - DOM manipulation and card state management
+   - `_buttonData` - Map cache for button data with prepared data URLs (runtime only)
 
 ### Button Types
 
@@ -49,15 +55,30 @@ Each button stored in IndexedDB has this structure:
   hasAudio: boolean,
 
   // Single-voice fields:
-  audioBlob: Blob | null,
+  audioArrayBuffer: ArrayBuffer,  // Current format (v0.2.0+)
+  audioBlob: Blob | null,         // Legacy format (still supported)
+  audioDataURL: string,            // Runtime cache (not persisted)
   audioDuration: number,
   mimeType: string,
 
   // Multi-voice fields:
-  recordings: [{id, blob, duration, mimeType, createdAt}],
+  recordings: [{
+    id,
+    arrayBuffer: ArrayBuffer,      // Current format (v0.2.0+)
+    blob: Blob,                    // Legacy format (still supported)
+    dataURL: string,               // Runtime cache (not persisted)
+    duration,
+    mimeType,
+    createdAt
+  }],
   playHistory: [recordingId1, recordingId2, ...] // tracks recently played
 }
 ```
+
+**Storage Format Notes:**
+- **v0.2.0+**: Audio stored as `ArrayBuffer` for better mobile compatibility
+- **Legacy**: Old buttons with `Blob` are automatically converted to `dataURL` on first play
+- **Runtime Cache**: `dataURL` fields are generated lazily and cached in `UI._buttonData` Map for performance
 
 ### Play History System
 
@@ -67,7 +88,29 @@ Multi-voice buttons use intelligent randomization to avoid repetition:
 - When all recordings are in history, it resets automatically
 - History is persisted to IndexedDB on each play
 
-This logic is in `handlePlay()` around line 967.
+This logic is in `handlePlay()`.
+
+### Mobile Compatibility & Data URL Approach (v0.3.0)
+
+**Critical Mobile Issue**: Mobile browsers (especially iOS Safari) have strict limitations on IndexedDB object references. Both `Blob` and `ArrayBuffer` objects retrieved from IndexedDB can become invalid after first use, causing `DOMException` errors on subsequent plays.
+
+**Solution**: Convert to data URLs for playback (implemented in v0.3.0):
+
+1. **Storage**: Audio saved as `ArrayBuffer` to IndexedDB (more reliable than Blob)
+2. **First Play**: When button is played, `prepareRecordingsWithDataURL()` converts `ArrayBuffer` → base64 data URL
+3. **Caching**: Data URL is cached in memory (`UI._buttonData` Map, not persisted to DB)
+4. **Subsequent Plays**: Use cached data URL directly via `AudioManager.startPlaybackFromURL()`
+
+**Key Functions**:
+- `arrayBufferToDataURL(buffer, mimeType)` - Converts ArrayBuffer to base64 data URL string
+- `prepareRecordingsWithDataURL(data)` - Lazy conversion, handles both Blob and ArrayBuffer formats
+- `AudioManager.startPlaybackFromURL(buttonId, dataURL)` - Plays audio from data URL (no Blob creation)
+
+**Benefits**:
+- No IndexedDB reference issues (data URLs are simple strings)
+- Works reliably on all mobile browsers
+- Backward compatible with old Blob-based buttons
+- Memory efficient (lazy conversion, only on first play)
 
 ### Two Modes
 
@@ -161,7 +204,26 @@ const historySize = data.recordings.length >= 3 ? 2 : 1;
 - **All data is local** - No backend, no cloud sync, pure client-side
 - **Audio cleanup** - `URL.revokeObjectURL()` is called to prevent memory leaks when playback stops
 - **Recording timer** - Uses `setInterval` at 100ms for smooth timer updates during recording
-- **Backward compatibility** - Buttons without `type` field default to `'single'` (see `renderCard()` line 789)
+- **Backward compatibility** - Buttons without `type` field default to `'single'`
+
+### Critical Mobile Considerations
+
+**DO NOT** directly use Blob or ArrayBuffer from IndexedDB for playback on mobile:
+```javascript
+// ❌ BAD - IndexedDB references cause DOMException on mobile
+const blob = recording.blob;
+audio.src = URL.createObjectURL(blob);
+
+// ❌ BAD - ArrayBuffer copying also fails on mobile
+const buffer = recording.arrayBuffer.slice(0);
+const blob = new Blob([buffer]);
+
+// ✅ GOOD - Use data URLs via helper functions
+const dataURL = recording.dataURL || arrayBufferToDataURL(recording.arrayBuffer, mimeType);
+AudioManager.startPlaybackFromURL(buttonId, dataURL);
+```
+
+**Always test mobile changes on actual devices** - Desktop browsers do not exhibit the same IndexedDB reference issues that mobile Safari/Chrome have.
 
 ## Browser Requirements
 
@@ -177,16 +239,38 @@ Browser warnings are shown at top if APIs are unavailable.
 Since this is a static site with no build process:
 
 1. **Edit code** - Modify HTML, CSS, or JS directly
-2. **Test** - Open/refresh `index.html` in browser (use a local server for HTTPS if testing microphone)
+2. **Test** - Open/refresh `index.html` in browser
 3. **Commit** - Use git normally
 
-For local HTTPS testing (microphone access):
+### Local Development Servers
+
+**HTTP Server** (desktop testing):
 ```bash
 # Python 3
 python -m http.server 8000
-
-# Or use any static server
+# Access at http://localhost:8000
 ```
+
+**HTTPS Server** (required for mobile testing - microphone requires HTTPS):
+```bash
+# Use the included simple_https.py server
+python simple_https.py
+# Access at https://192.168.0.3:8443 (or your local IP)
+```
+
+The HTTPS server uses self-signed certificates (`cert.pem`, `key.pem`). On first mobile access, you'll need to accept the certificate warning in your browser.
+
+### Mobile Testing & Debugging
+
+**Mobile Debug Console** (Eruda):
+- Already included in `index.html` via CDN
+- Console automatically initializes on page load
+- Access full DevTools on mobile device (console, network, elements, etc.)
+- Toggle with floating button on screen
+
+**Remote Debugging** (weinre):
+- Commented script tag in `index.html` for weinre debugging
+- Useful for debugging on devices that don't support Eruda well
 
 ## Key Event Flows
 
@@ -201,12 +285,13 @@ python -m http.server 8000
 
 ### Playback Flow (Multi-Voice)
 1. User clicks play → `handlePlay(buttonId)`
-2. Loads button data from DB
-3. Filters recordings not in `playHistory`
-4. Selects random from available
-5. Updates `playHistory` and saves to DB
-6. Creates Audio element and plays
-7. On ended/error, calls `stopPlayback()` and updates UI
+2. Checks `UI._buttonData` cache, loads from DB if needed
+3. Converts to data URL if not cached: `prepareRecordingsWithDataURL()`
+4. Filters recordings not in `playHistory`
+5. Selects random from available
+6. Updates `playHistory` and saves to DB (async, non-blocking)
+7. Plays via `AudioManager.startPlaybackFromURL(buttonId, recording.dataURL)`
+8. On ended/error, calls `stopPlayback()` and updates UI
 
 ### Drag-and-Drop Reorder
 1. User drags card → sets `draggedCard` reference
