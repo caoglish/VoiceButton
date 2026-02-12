@@ -53,6 +53,11 @@
   <div id="modal-overlay" class="modal-overlay" hidden>
     <div class="modal" role="dialog" aria-labelledby="modal-title" aria-modal="true">
       <h2 id="modal-title">Add New Button</h2>
+      <label for="button-type-select" class="modal-label" id="button-type-label">Button Type</label>
+      <select id="button-type-select" class="modal-select">
+        <option value="single" id="single-voice-option">Single Voice Button</option>
+        <option value="multi" id="multi-voice-option">Multi-Voice Button</option>
+      </select>
       <label for="modal-input" class="modal-label">Button Label</label>
       <input id="modal-input" class="modal-input" type="text" maxlength="30" autocomplete="off">
       <div class="modal-actions">

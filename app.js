@@ -1,11 +1,12 @@
 (function () {
   'use strict';
 
-  const VERSION = '0.0.2';
+  const VERSION = '0.1.1';
   const DB_NAME = 'VoiceButtonDB';
   const STORE_NAME = 'buttons';
   const MAX_BUTTONS = 9;
   const MIN_RECORDING_MS = 200;
+  const MAX_MULTI_RECORDINGS = 10;
 
   // ── Translations ──
 
@@ -51,6 +52,15 @@
       emptyState: '还没有按钮。点击"添加新按钮"开始使用。',
       buttonCount: '{count} / {max}',
       defaultButtonLabel: '按钮 {count}',
+      buttonType: '按钮类型',
+      singleVoice: '单语音按钮',
+      multiVoice: '多语音按钮',
+      recordingCount: '{count} / {max}',
+      addRecording: '添加录音',
+      deleteRecording: '删除此录音',
+      playThis: '播放',
+      recording: '录音',
+      maxRecordingsReached: '已达到最多10个录音',
     },
     en: {
       appTitle: 'Voice Button Board',
@@ -93,6 +103,15 @@
       emptyState: 'No buttons yet. Click "Add New Button" to get started.',
       buttonCount: '{count} / {max}',
       defaultButtonLabel: 'Button {count}',
+      buttonType: 'Button Type',
+      singleVoice: 'Single Voice Button',
+      multiVoice: 'Multi-Voice Button',
+      recordingCount: '{count} / {max}',
+      addRecording: 'Add Recording',
+      deleteRecording: 'Delete Recording',
+      playThis: 'Play',
+      recording: 'Recording',
+      maxRecordingsReached: 'Maximum 10 recordings reached',
     }
   };
 
@@ -136,7 +155,19 @@
       if (footer) footer.textContent = this.get('footerText');
 
       document.getElementById('modal-title').textContent = this.get('modalAddTitle');
-      document.querySelector('.modal-label').textContent = this.get('modalLabelText');
+
+      const buttonTypeLabel = document.getElementById('button-type-label');
+      if (buttonTypeLabel) buttonTypeLabel.textContent = this.get('buttonType');
+
+      const singleVoiceOption = document.getElementById('single-voice-option');
+      if (singleVoiceOption) singleVoiceOption.textContent = this.get('singleVoice');
+
+      const multiVoiceOption = document.getElementById('multi-voice-option');
+      if (multiVoiceOption) multiVoiceOption.textContent = this.get('multiVoice');
+
+      const modalLabels = document.querySelectorAll('.modal-label');
+      if (modalLabels[1]) modalLabels[1].textContent = this.get('modalLabelText');
+
       document.getElementById('modal-cancel').textContent = this.get('cancel');
       document.getElementById('modal-confirm').textContent = this.get('add');
 
@@ -344,12 +375,33 @@
           try {
             const record = await DB.get(buttonId);
             if (record) {
-              record.hasAudio = true;
-              record.audioBlob = audioBlob;
-              record.audioDuration = audioDuration;
-              record.mimeType = mimeType;
-              await DB.put(record);
-              updateStorageInfo();
+              if (record.type === 'multi') {
+                // Multi-voice button: add to recordings array
+                if (!record.recordings) record.recordings = [];
+                if (record.recordings.length >= MAX_MULTI_RECORDINGS) {
+                  showToast(Lang.get('maxRecordingsReached'));
+                } else {
+                  const recordingId = 'rec_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+                  record.recordings.push({
+                    id: recordingId,
+                    blob: audioBlob,
+                    duration: audioDuration,
+                    mimeType: mimeType,
+                    createdAt: new Date().toISOString()
+                  });
+                  record.hasAudio = record.recordings.length > 0;
+                  await DB.put(record);
+                  updateStorageInfo();
+                }
+              } else {
+                // Single-voice button: replace the recording
+                record.hasAudio = true;
+                record.audioBlob = audioBlob;
+                record.audioDuration = audioDuration;
+                record.mimeType = mimeType;
+                await DB.put(record);
+                updateStorageInfo();
+              }
             }
           } catch (err) {
             console.error('Failed to save recording:', err);
@@ -464,6 +516,10 @@
       if (AudioManager.getRecordingButtonId() === buttonId) return 'recording';
       if (AudioManager.getPlayingButtonId() === buttonId) return 'playing';
       const data = this._buttonData.get(buttonId);
+      if (data && data.type === 'multi') {
+        if (data.recordings && data.recordings.length > 0) return 'has-audio';
+        return 'empty';
+      }
       if (data && data.hasAudio) return 'has-audio';
       return 'empty';
     },
@@ -489,12 +545,25 @@
     _applyCardState(card, data) {
       const buttonId = data.id;
       const state = this.getCardState(buttonId);
+      const isMulti = data.type === 'multi';
 
       card.classList.remove('state-empty', 'state-recording', 'state-has-audio', 'state-playing', 'state-error');
       card.classList.add(`state-${state}`);
 
+      if (isMulti) {
+        card.classList.add('multi-voice-card');
+      } else {
+        card.classList.remove('multi-voice-card');
+      }
+
       const iconEl = card.querySelector('.card-icon');
       const big = isBigMode();
+
+      // For multi-voice buttons, render differently
+      if (isMulti && !big) {
+        this._renderMultiVoiceCard(card, data, state);
+        return;
+      }
 
       if (big) {
         switch (state) {
@@ -530,19 +599,40 @@
 
       const statusEl = card.querySelector('.card-status');
       if (big) {
-        switch (state) {
-          case 'empty':
-            statusEl.innerHTML = Lang.get('clickToRecord');
-            break;
-          case 'recording':
-            statusEl.innerHTML = '<span class="recording-timer">0.0s</span>';
-            break;
-          case 'has-audio':
-            statusEl.textContent = this.formatDuration(data.audioDuration || 0);
-            break;
-          case 'playing':
-            statusEl.textContent = Lang.get('playing');
-            break;
+        if (isMulti) {
+          switch (state) {
+            case 'recording':
+              statusEl.innerHTML = '<span class="recording-timer">0.0s</span>';
+              break;
+            case 'playing':
+              statusEl.textContent = Lang.get('playing');
+              break;
+            default:
+              if (data.recordings) {
+                statusEl.textContent = Lang.get('recordingCount', {
+                  count: data.recordings.length,
+                  max: MAX_MULTI_RECORDINGS
+                });
+              } else {
+                statusEl.textContent = Lang.get('clickToRecord');
+              }
+              break;
+          }
+        } else {
+          switch (state) {
+            case 'empty':
+              statusEl.innerHTML = Lang.get('clickToRecord');
+              break;
+            case 'recording':
+              statusEl.innerHTML = '<span class="recording-timer">0.0s</span>';
+              break;
+            case 'has-audio':
+              statusEl.textContent = this.formatDuration(data.audioDuration || 0);
+              break;
+            case 'playing':
+              statusEl.textContent = Lang.get('playing');
+              break;
+          }
         }
       } else {
         switch (state) {
@@ -595,7 +685,110 @@
       }
     },
 
+    _renderMultiVoiceCard(card, data, state) {
+      const iconEl = card.querySelector('.card-icon');
+      const statusEl = card.querySelector('.card-status');
+      const actionsEl = card.querySelector('.card-actions');
+
+      // Icon based on state
+      if (state === 'recording') {
+        iconEl.innerHTML = Icons.recordDot;
+        // Show recording timer
+        statusEl.innerHTML = '<span class="recording-timer">0.0s</span>';
+      } else if (state === 'playing') {
+        iconEl.innerHTML = Icons.speaker;
+        statusEl.textContent = Lang.get('playing');
+      } else {
+        const recordings = data.recordings || [];
+        // Show recording count
+        statusEl.textContent = Lang.get('recordingCount', {
+          count: recordings.length,
+          max: MAX_MULTI_RECORDINGS
+        });
+
+        if (recordings.length > 0) {
+          iconEl.innerHTML = Icons.micCheck;
+        } else {
+          iconEl.innerHTML = Icons.mic;
+        }
+      }
+
+      // Actions
+      actionsEl.innerHTML = '';
+
+      if (state === 'recording') {
+        const stopBtn = document.createElement('button');
+        stopBtn.className = 'card-btn btn-record recording';
+        stopBtn.textContent = Lang.get('stop');
+        stopBtn.addEventListener('click', () => handleStopRecording(data.id));
+        actionsEl.appendChild(stopBtn);
+      } else {
+        const recordings = data.recordings || [];
+        // Add recording button
+        if (recordings.length < MAX_MULTI_RECORDINGS) {
+          const addBtn = document.createElement('button');
+          addBtn.className = 'card-btn btn-record';
+          addBtn.textContent = Lang.get('addRecording');
+          addBtn.addEventListener('click', () => handleStartRecording(data.id));
+          actionsEl.appendChild(addBtn);
+        }
+      }
+
+      // Render recordings list
+      const listContainer = card.querySelector('.recordings-list');
+      if (listContainer) {
+        listContainer.remove();
+      }
+
+      const recordings = data.recordings || [];
+      if (recordings.length > 0 && state !== 'recording') {
+        const list = document.createElement('div');
+        list.className = 'recordings-list';
+
+        recordings.forEach((rec, index) => {
+          const item = document.createElement('div');
+          item.className = 'recording-item';
+
+          const info = document.createElement('div');
+          info.className = 'recording-info';
+          info.innerHTML = `<span class="recording-number">${Lang.get('recording')} ${index + 1}</span><span class="recording-duration">${this.formatDuration(rec.duration)}</span>`;
+          item.appendChild(info);
+
+          const itemActions = document.createElement('div');
+          itemActions.className = 'recording-actions';
+
+          const playBtn = document.createElement('button');
+          playBtn.className = 'recording-btn btn-play-small';
+          playBtn.textContent = Lang.get('playThis');
+          playBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            handlePlayMultiRecording(data.id, rec.id);
+          });
+          itemActions.appendChild(playBtn);
+
+          const delBtn = document.createElement('button');
+          delBtn.className = 'recording-btn btn-delete-small';
+          delBtn.innerHTML = Icons.x;
+          delBtn.title = Lang.get('deleteRecording');
+          delBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            handleDeleteRecording(data.id, rec.id);
+          });
+          itemActions.appendChild(delBtn);
+
+          item.appendChild(itemActions);
+          list.appendChild(item);
+        });
+
+        card.appendChild(list);
+      }
+    },
+
     renderCard(data) {
+      // Ensure backward compatibility: if no type field, treat as single-voice
+      if (!data.type) {
+        data.type = 'single';
+      }
       this._buttonData.set(data.id, data);
 
       const card = document.createElement('div');
@@ -773,11 +966,92 @@
 
   async function handlePlay(buttonId) {
     const data = await DB.get(buttonId);
-    if (!data || !data.audioBlob) {
+    if (!data) {
       showToast(Lang.get('noAudioToPlay'));
       return;
     }
-    AudioManager.startPlayback(buttonId, data.audioBlob);
+
+    if (data.type === 'multi') {
+      // For multi-voice button, play random recording with history avoidance
+      if (!data.recordings || data.recordings.length === 0) {
+        showToast(Lang.get('noAudioToPlay'));
+        return;
+      }
+
+      // Initialize play history if not exists
+      if (!data.playHistory) {
+        data.playHistory = [];
+      }
+
+      // Determine history size based on number of recordings
+      // For 2 recordings: keep last 1 (avoid immediate repeat)
+      // For 3+ recordings: keep last 2 (avoid repeat within 2-3 clicks)
+      const historySize = data.recordings.length >= 3 ? 2 : 1;
+
+      // Get available recordings (exclude recent history)
+      let availableRecordings = data.recordings.filter(rec =>
+        !data.playHistory.includes(rec.id)
+      );
+
+      // If all recordings are in history, reset and use all
+      if (availableRecordings.length === 0) {
+        availableRecordings = data.recordings;
+        data.playHistory = [];
+      }
+
+      // Select random recording from available ones
+      const randomIndex = Math.floor(Math.random() * availableRecordings.length);
+      const recording = availableRecordings[randomIndex];
+
+      // Update play history
+      data.playHistory.push(recording.id);
+      if (data.playHistory.length > historySize) {
+        data.playHistory.shift(); // Remove oldest entry
+      }
+
+      // Save updated history to database
+      await DB.put(data);
+
+      AudioManager.startPlayback(buttonId, recording.blob);
+    } else {
+      // For single-voice button
+      if (!data.audioBlob) {
+        showToast(Lang.get('noAudioToPlay'));
+        return;
+      }
+      AudioManager.startPlayback(buttonId, data.audioBlob);
+    }
+  }
+
+  async function handlePlayMultiRecording(buttonId, recordingId) {
+    const data = await DB.get(buttonId);
+    if (!data || !data.recordings) {
+      showToast(Lang.get('noAudioToPlay'));
+      return;
+    }
+    const recording = data.recordings.find(r => r.id === recordingId);
+    if (!recording) {
+      showToast(Lang.get('noAudioToPlay'));
+      return;
+    }
+    AudioManager.startPlayback(buttonId, recording.blob);
+  }
+
+  async function handleDeleteRecording(buttonId, recordingId) {
+    const data = await DB.get(buttonId);
+    if (!data || !data.recordings) return;
+
+    data.recordings = data.recordings.filter(r => r.id !== recordingId);
+    data.hasAudio = data.recordings.length > 0;
+
+    try {
+      await DB.put(data);
+      UI.setCardState(buttonId);
+      updateStorageInfo();
+    } catch (err) {
+      console.error('Failed to delete recording:', err);
+      showToast(Lang.get('failedToDelete'));
+    }
   }
 
   function handleDelete(id) {
@@ -860,17 +1134,26 @@
       return;
     }
 
+    const typeSelect = document.getElementById('button-type-select');
+    const buttonType = typeSelect ? typeSelect.value : 'single';
+
     const id = 'btn_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
     const data = {
       id,
       label,
+      type: buttonType,
       order: Date.now(),
       createdAt: new Date().toISOString(),
       hasAudio: false,
-      audioBlob: null,
-      audioDuration: 0,
-      mimeType: null,
     };
+
+    if (buttonType === 'multi') {
+      data.recordings = [];
+    } else {
+      data.audioBlob = null;
+      data.audioDuration = 0;
+      data.mimeType = null;
+    }
 
     try {
       await DB.put(data);
