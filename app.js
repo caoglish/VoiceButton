@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '0.3.0';
+  const VERSION = '0.3.1';
   const DB_NAME = 'VoiceButtonDB';
   const STORE_NAME = 'buttons';
   const MAX_BUTTONS = 9;
