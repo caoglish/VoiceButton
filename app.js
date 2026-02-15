@@ -394,6 +394,8 @@
                   });
                   record.hasAudio = record.recordings.length > 0;
                   await DB.put(record);
+                  // Clear cache to force reload with new recording
+                  UI._buttonData.delete(buttonId);
                   updateStorageInfo();
                 }
               } else {
@@ -403,6 +405,8 @@
                 record.audioDuration = audioDuration;
                 record.mimeType = mimeType;
                 await DB.put(record);
+                // Clear cache to force reload with new recording
+                UI._buttonData.delete(buttonId);
                 updateStorageInfo();
               }
             }
@@ -1291,7 +1295,7 @@
           data = await prepareRecordingsWithDataURL(data);
           UI._buttonData.set(buttonId, data);
         }
-      } else if (data.recordings.length > 0 && !data.recordings[0].dataURL) {
+      } else if (data.recordings.length > 0 && data.recordings.some(r => !r.dataURL)) {
         console.log('[handlePlayMultiRecording] Preparing data URLs for cached data');
         data = await prepareRecordingsWithDataURL(data);
         UI._buttonData.set(buttonId, data);
@@ -1335,6 +1339,8 @@
 
     try {
       await DB.put(data);
+      // Clear cache to force reload after deleting recording
+      UI._buttonData.delete(buttonId);
       UI.setCardState(buttonId);
       updateStorageInfo();
     } catch (err) {
@@ -1368,6 +1374,8 @@
 
     try {
       await DB.delete(id);
+      // Clear cache for deleted button
+      UI._buttonData.delete(id);
       UI.removeCard(id);
     } catch (err) {
       console.error('Failed to delete button:', err);

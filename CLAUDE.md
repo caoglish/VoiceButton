@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Voice Button Board is a vanilla JavaScript web application for recording and playing back voice snippets. It runs entirely in the browser with no build process or dependencies—just open `index.html` in a modern browser.
 
-**Current Version**: 0.3.0 (Mobile-optimized with data URL playback)
+**Current Version**: 0.3.1 (Fixed cache invalidation for new recordings)
 
 ## Architecture
 
@@ -111,6 +111,13 @@ This logic is in `handlePlay()`.
 - Works reliably on all mobile browsers
 - Backward compatible with old Blob-based buttons
 - Memory efficient (lazy conversion, only on first play)
+
+**Cache Invalidation (v0.3.1)**:
+To ensure cache consistency, `UI._buttonData` cache is cleared in these operations:
+- After saving new recording (both single and multi-voice)
+- After deleting a recording from multi-voice button
+- After deleting entire button
+This forces next playback to reload fresh data from IndexedDB with all recordings properly prepared.
 
 ### Two Modes
 
